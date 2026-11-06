@@ -1,0 +1,37 @@
+[project]
+name = "voice"
+version = "0.1.0"
+description = "Local text-to-speech and speech-to-text on Apple Silicon, one short-lived process per call"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "misaki[en]>=0.9",
+    "mlx-audio>=0.5.4,<0.6",
+    "sounddevice>=0.5",
+    # misaki's English step loads this spaCy model and downloads it on first use otherwise,
+    # which fails offline; pinning it here makes a fresh install complete.
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+]
+
+[project.scripts]
+voice = "voice.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.19,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv]
+# Kokoro's text step (misaki -> spacy) crashed with OverflowError in
+# Tokenizer._flush_specials on the newer spacy support libraries resolved
+# 2026-10-24. These are the versions of a known-working install.
+constraint-dependencies = [
+    "cymem==2.0.13",
+    "murmurhash==1.0.15",
+    "preshed==3.0.13",
+    "srsly==2.5.3",
+    "numpy==2.5.3",
+    "mlx-audio==0.5.4",
+    "mlx==0.32.2",
+]
