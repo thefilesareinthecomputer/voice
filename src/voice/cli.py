@@ -2,6 +2,7 @@
 
     voice speak "text"     read the text aloud (or text on stdin)
     voice speak --stop     stop whatever is playing
+    voice voices           list the speaking voices (pick one with speak --voice)
     voice listen           record until a pause, transcribe, print and copy to the clipboard
     voice setup            download the default models once; every other command runs offline
 
@@ -24,7 +25,11 @@ def main(argv: list[str] | None = None) -> int:
     speak = sub.add_parser("speak", help="read text aloud")
     speak.add_argument("text", nargs="*", help="the text; read from stdin when absent")
     speak.add_argument("--stop", action="store_true", help="stop whatever is playing")
+    speak.add_argument("--voice", help="speaking voice, such as af_heart or bf_emma (see `voice voices`)")
+    speak.add_argument("--speed", type=float, help="speaking speed, 1.0 is normal")
     speak.add_argument("--force", action="store_true", help="load even under critical memory pressure")
+
+    sub.add_parser("voices", help="list the speaking voices in the local cache")
 
     listen = sub.add_parser("listen", help="record, transcribe, print and copy to the clipboard")
     listen.add_argument("--max-seconds", type=float, default=60.0, help="longest recording (default 60)")
@@ -40,7 +45,13 @@ def main(argv: list[str] | None = None) -> int:
             from voice import speak as cmd
 
             text = " ".join(args.text) if args.text else (None if args.stop else sys.stdin.read())
-            return cmd.run(text, stop=args.stop, force=args.force)
+            return cmd.run(text, stop=args.stop, force=args.force, voice=args.voice, speed=args.speed)
+        if args.command == "voices":
+            from voice import speak as cmd
+
+            names = cmd.voices()
+            print("\n".join(names) if names else "no voices cached yet; run `voice setup`")
+            return 0
         if args.command == "listen":
             from voice import listen as cmd
 

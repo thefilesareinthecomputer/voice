@@ -142,8 +142,15 @@ class TestSpeak(unittest.TestCase):
     def test_speaks_and_clears_its_pidfile(self) -> None:
         with mock.patch.object(speak, "play") as play, mock.patch("signal.signal"):
             self.assertEqual(speak.run("hello"), 0)
-        play.assert_called_once_with("hello", False)
+        play.assert_called_once_with("hello", False, None, None)
         self.assertFalse(speak.PIDFILE.exists())
+
+    def test_flag_beats_environment_beats_default_and_accent_follows_the_voice(self) -> None:
+        with mock.patch.dict(os.environ, {"VOICE_NAME": "am_michael", "VOICE_SPEED": "1.2"}):
+            self.assertEqual(speak.settings(), ("am_michael", 1.2, "a"))
+            self.assertEqual(speak.settings("bf_emma", 0.9), ("bf_emma", 0.9, "b"))
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(speak.settings(), ("af_heart", 1.0, "a"))
 
     def test_empty_text_plays_nothing(self) -> None:
         with mock.patch.object(speak, "play") as play:
@@ -156,7 +163,13 @@ class TestCli(unittest.TestCase):
         with mock.patch("voice.speak.run", return_value=0) as run, \
                 mock.patch("sys.stdin", io.StringIO("from stdin\n")):
             self.assertEqual(cli.main(["speak"]), 0)
-        run.assert_called_once_with("from stdin\n", stop=False, force=False)
+        run.assert_called_once_with("from stdin\n", stop=False, force=False, voice=None, speed=None)
+
+    def test_voice_flags_reach_the_speaker_before_the_appended_text(self) -> None:
+        # the Claude Code hook appends the text after the configured command and its flags
+        with mock.patch("voice.speak.run", return_value=0) as run:
+            self.assertEqual(cli.main(["speak", "--voice", "bf_emma", "--speed", "1.1", "the reply"]), 0)
+        run.assert_called_once_with("the reply", stop=False, force=False, voice="bf_emma", speed=1.1)
 
     def test_memory_pressure_exits_3(self) -> None:
         with mock.patch("voice.listen.run", side_effect=models.MemoryPressure("critical")):

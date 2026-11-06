@@ -19,6 +19,8 @@ Python 3.12 and an Apple Silicon Mac are required.
 |---|---|
 | `voice speak "text"` | Reads the text aloud. Text on stdin works too. A new call stops the one already playing. |
 | `voice speak --stop` | Stops whatever is playing. |
+| `voice speak --voice bf_emma --speed 1.1 "text"` | Picks the speaking voice and speed for one call. |
+| `voice voices` | Lists the speaking voices in the local cache. The first letter is the accent (`a` American, `b` British) and the second the voice (`f` female, `m` male). |
 | `voice listen` | Records from the microphone until you pause, transcribes, prints the text and copies it to the clipboard. `--silence 1.5` sets the pause length in seconds, `--max-seconds 60` the longest recording, and `--no-copy` prints only. |
 | `voice setup` | Downloads the default models into the Hugging Face cache. Every other command runs offline. |
 
@@ -29,7 +31,7 @@ Python 3.12 and an Apple Silicon Mac are required.
 | Speech-to-text | `mlx-community/parakeet-tdt-0.6b-v2`, English | about 2.5 GB | CC-BY-4.0 (NVIDIA) | `VOICE_STT_MODEL` |
 | Text-to-speech | `mlx-community/Kokoro-82M-bf16` | about 390 MB | Apache-2.0 | `VOICE_MODEL` |
 
-Any speech-to-text model that mlx-audio loads works in `VOICE_STT_MODEL`, such as `mlx-community/whisper-large-v3-turbo-q4` for a smaller download. `VOICE_NAME` (default `af_heart`) and `VOICE_SPEED` (default `1.0`) set the speaking voice.
+Any speech-to-text model that mlx-audio loads works in `VOICE_STT_MODEL`, such as `mlx-community/whisper-large-v3-turbo-q4` for a smaller download. `VOICE_NAME` (default `af_heart`) and `VOICE_SPEED` (default `1.0`) set the speaking voice; the `--voice` and `--speed` flags override them.
 
 ## Dictation from a hotkey
 
@@ -40,7 +42,7 @@ In the Shortcuts app, make a shortcut with one "Run Shell Script" action running
 Claude Code can read each reply aloud through a Stop hook that runs a configured speaker command with the text as its last argument, or `--stop`. Point that command at `voice speak`:
 
 ```json
-{"enabled": true, "command": ["/full/path/to/voice", "speak"]}
+{"enabled": true, "command": ["/full/path/to/voice", "speak", "--voice", "bf_emma"]}
 ```
 
 The hook speaks every reply by itself, so no skill or model call is involved.
