@@ -4,6 +4,12 @@ All notable changes to this project are listed here. The format follows [Keep a 
 
 ## Unreleased
 
+### Added
+
+- `voice listen --toggle` for a keyboard shortcut: the first press starts a background recording with a sound and a notification, the next press stops it, and the text is transcribed and copied. No silence cutoff; a recording stops on its own after 30 minutes.
+- `--paste` also pastes the text at the cursor when a toggle recording stops, and keeps it on the clipboard.
+- Recordings longer than a minute are transcribed in chunks where the model supports it.
+
 ## 0.1.0 - 2026-11-06
 
 ### Added

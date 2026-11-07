@@ -53,9 +53,13 @@ Start talking. When you pause for a second and a half, `voice` transcribes what 
 | `--max-seconds 60` | 60 s | the longest recording |
 | `--no-copy` | off | print only, leave the clipboard alone |
 
-### From a keyboard shortcut
+### From a keyboard shortcut, hands free
 
-Dictation is most useful from anywhere, without a terminal. In the **Shortcuts** app, create a shortcut with one **Run Shell Script** action that runs the full path to `voice listen` (find it with `which voice`), then give the shortcut a keyboard shortcut in its details. Press it, speak, pause, and paste.
+`voice listen --toggle --paste` is made for a keyboard shortcut. The first press starts recording in the background and returns at once, with a sound and a notification; macOS's orange microphone dot stays in the menu bar for as long as it records. Talk for as long as you like and walk away from the keyboard if you want. The next press stops it: the text is transcribed, put on the clipboard and pasted at your cursor, and a notification shows the start of it. A recording stops on its own after 30 minutes (`--max-seconds`).
+
+To set it up, open the **Shortcuts** app and turn on **Settings > Advanced > Allow Running Scripts**. Create a shortcut with one **Run Shell Script** action running the full path that `which voice` prints, followed by `listen --toggle --paste`. Then open the shortcut's details and add a keyboard shortcut with a modifier, such as ⌃⌥⌘D. The first run asks for microphone access, and the first paste asks for Accessibility permission for Shortcuts. If you decline the second, the text stays on the clipboard. Leave out `--paste` to copy only.
+
+In toggle mode the model loads after you stop, not while you talk, so nothing heavy sits in memory during a long recording; the wait after stopping is a few seconds plus the transcription.
 
 ## Reading aloud
 
@@ -104,7 +108,7 @@ Every command is its own short process: it loads one model, does its job and fre
 
 ## Privacy
 
-Audio is recorded into memory, transcribed and discarded; nothing is written to disk except the transcript on your clipboard. After `voice setup`, `voice` makes no network requests: every other command sets `HF_HUB_OFFLINE=1` before any model library is imported. The one file it keeps is a small pid file in `~/.local/state/claude-voice/`, used to stop a speaker that is still talking.
+Audio is recorded into memory, transcribed and discarded, and the transcript goes only to your clipboard and, with `--paste`, your cursor. After `voice setup`, `voice` makes no network requests: every other command sets `HF_HUB_OFFLINE=1` before any model library is imported. The files it keeps, in `~/.local/state/claude-voice/`, are two pid files that let a later command stop the one running, and `listen.log`, which records errors from background recordings and never a transcript.
 
 ## Development
 

@@ -108,6 +108,150 @@ class TestTranscribe(unittest.TestCase):
         release.assert_called_once()
 
 
+class FakeStream:
+    """Stands in for sounddevice.InputStream: hands back quiet blocks."""
+
+    def __init__(self, **kwargs) -> None:
+        self.reads = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> None:
+        return None
+
+    def read(self, n: int):
+        self.reads += 1
+        return np.zeros((n, 1), dtype="float32"), False
+
+
+class TestToggle(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        state = Path(tmp.name)
+        patcher = mock.patch.multiple(listen, STATE=state, PIDFILE=state / "listen.pid", LOG=state / "listen.log")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_first_press_starts_a_detached_recorder_and_returns(self) -> None:
+        with mock.patch.dict(os.environ, {"VOICE_PRESSURE_LEVEL": "1"}), \
+                mock.patch.object(listen.subprocess, "Popen") as popen, \
+                mock.patch.object(listen.os, "kill") as kill:
+            self.assertEqual(listen.toggle(1800.0, True, False), 0)
+        argv = popen.call_args.args[0]
+        self.assertIn("--until-stopped", argv)
+        self.assertTrue(popen.call_args.kwargs["start_new_session"])
+        kill.assert_not_called()
+
+    def test_second_press_signals_the_running_recorder(self) -> None:
+        listen.PIDFILE.write_text("4242")
+        ps = SimpleNamespace(stdout="/path/python -m voice.cli listen --until-stopped --max-seconds 1800")
+        with mock.patch.object(listen.subprocess, "run", return_value=ps), \
+                mock.patch.object(listen.subprocess, "Popen") as popen, \
+                mock.patch.object(listen.os, "kill") as kill:
+            self.assertEqual(listen.toggle(1800.0, True, False), 0)
+        kill.assert_called_once_with(4242, listen.signal.SIGUSR1)
+        popen.assert_not_called()
+
+    def test_a_stale_pid_that_is_not_a_recorder_starts_a_new_one(self) -> None:
+        listen.PIDFILE.write_text("4242")
+        with mock.patch.dict(os.environ, {"VOICE_PRESSURE_LEVEL": "1"}), \
+                mock.patch.object(listen.subprocess, "run", return_value=SimpleNamespace(stdout="/bin/zsh")), \
+                mock.patch.object(listen.subprocess, "Popen") as popen, \
+                mock.patch.object(listen.os, "kill") as kill:
+            listen.toggle(1800.0, True, False)
+        kill.assert_not_called()
+        popen.assert_called_once()
+
+    def test_critical_pressure_refuses_before_starting(self) -> None:
+        with mock.patch.dict(os.environ, {"VOICE_PRESSURE_LEVEL": "4"}), \
+                mock.patch.object(listen.subprocess, "Popen") as popen, \
+                self.assertRaises(models.MemoryPressure):
+            listen.toggle(1800.0, True, False)
+        popen.assert_not_called()
+
+    def test_background_recording_signals_copies_notifies_and_clears_its_pidfile(self) -> None:
+        notes: list[tuple[str, str]] = []
+        with mock.patch.object(listen, "record", return_value=np.ones(10, dtype="float32")) as record, \
+                mock.patch.object(listen, "transcribe", return_value="walked and talked"), \
+                mock.patch.object(listen, "copy") as copy, \
+                mock.patch.object(listen, "cue") as cue, \
+                mock.patch.object(listen, "notify", side_effect=lambda t, m: notes.append((t, m))), \
+                mock.patch.object(listen.signal, "signal"), \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.assertEqual(listen.run_until_stopped(1800.0, True, False), 0)
+        self.assertNotIn("walked and talked", out.getvalue())  # stdout is the log file; no transcript on disk
+        self.assertIsNone(record.call_args.args[1])  # no silence cutoff in toggle mode
+        copy.assert_called_once_with("walked and talked")
+        self.assertEqual([c.args[0] for c in cue.call_args_list], ["start", "stop"])
+        self.assertEqual(notes[0][0], "voice: listening")
+        self.assertEqual(notes[-1], ("voice: copied", "walked and talked"))
+        self.assertFalse(listen.PIDFILE.exists())
+
+    def _stop_with_paste(self, pasted: bool) -> tuple[mock.Mock, list[tuple[str, str]]]:
+        notes: list[tuple[str, str]] = []
+        with mock.patch.object(listen, "record", return_value=np.ones(10, dtype="float32")), \
+                mock.patch.object(listen, "transcribe", return_value="to the cursor"), \
+                mock.patch.object(listen, "copy") as copy, \
+                mock.patch.object(listen, "paste", return_value=pasted) as paste, \
+                mock.patch.object(listen, "cue"), \
+                mock.patch.object(listen, "notify", side_effect=lambda t, m: notes.append((t, m))), \
+                mock.patch.object(listen.signal, "signal"):
+            self.assertEqual(listen.run_until_stopped(1800.0, True, False, paste_too=True), 0)
+        copy.assert_called_once_with("to the cursor")
+        paste.assert_called_once()
+        return copy, notes
+
+    def test_paste_keeps_the_text_on_the_clipboard_and_says_so(self) -> None:
+        _, notes = self._stop_with_paste(pasted=True)
+        self.assertEqual(notes[-1], ("voice: pasted", "to the cursor"))
+
+    def test_a_blocked_paste_leaves_the_text_on_the_clipboard_and_names_the_permission(self) -> None:
+        _, notes = self._stop_with_paste(pasted=False)
+        self.assertEqual(notes[-1][0], "voice: copied, paste blocked")
+        self.assertIn("Accessibility", notes[-1][1])
+
+    def test_paste_flag_reaches_the_background_recorder(self) -> None:
+        with mock.patch.dict(os.environ, {"VOICE_PRESSURE_LEVEL": "1"}), \
+                mock.patch.object(listen.subprocess, "Popen") as popen:
+            listen.toggle(1800.0, True, False, paste_too=True)
+        self.assertIn("--paste", popen.call_args.args[0])
+
+    def test_record_stops_when_told_and_ignores_silence_when_none(self) -> None:
+        reads = {"n": 0}
+
+        def stop() -> bool:
+            reads["n"] += 1
+            return reads["n"] > 30  # three seconds of quiet, well past any silence cutoff
+
+        fake = SimpleNamespace(InputStream=FakeStream)
+        with mock.patch.dict(sys.modules, {"sounddevice": fake}):
+            audio = listen.record(1800.0, None, stop)
+        self.assertEqual(len(audio), 30 * int(listen.RATE * listen.FRAME))
+
+
+class TestChunking(unittest.TestCase):
+    def test_long_audio_is_chunked_only_where_the_model_supports_it(self) -> None:
+        calls: list[dict] = []
+
+        class Chunky:
+            def generate(self, audio, *, chunk_duration=None):
+                calls.append({"chunk_duration": chunk_duration})
+                return SimpleNamespace(text="ok")
+
+        class Plain:
+            def generate(self, audio):
+                calls.append({})
+                return SimpleNamespace(text="ok")
+
+        long = np.zeros(int(listen.RATE * (listen.CHUNK_SECONDS + 1)), dtype="float32")
+        listen.transcribe_with(Chunky(), long)
+        listen.transcribe_with(Plain(), long)
+        listen.transcribe_with(Chunky(), long[: listen.RATE])
+        self.assertEqual(calls, [{"chunk_duration": listen.CHUNK_SECONDS}, {}, {"chunk_duration": None}])
+
+
 class TestLoading(unittest.TestCase):
     def test_background_load_is_released_even_on_error(self) -> None:
         loader = mock.Mock(return_value="model")

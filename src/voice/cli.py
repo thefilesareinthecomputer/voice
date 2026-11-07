@@ -4,6 +4,7 @@
     voice speak --stop     stop whatever is playing
     voice voices           list the speaking voices (pick one with speak --voice)
     voice listen           record until a pause, transcribe, print and copy to the clipboard
+    voice listen --toggle  start recording in the background, or stop it and copy the text
     voice setup            download the default models once; every other command runs offline
 
 Each command loads its model, does one job and releases it before it exits.
@@ -33,9 +34,15 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("voices", help="list the speaking voices in the local cache")
 
     listen = sub.add_parser("listen", help="record, transcribe, print and copy to the clipboard")
-    listen.add_argument("--max-seconds", type=float, default=60.0, help="longest recording (default 60)")
+    listen.add_argument("--toggle", action="store_true",
+                        help="start a background recording, or stop the running one; for a keyboard shortcut")
+    listen.add_argument("--until-stopped", action="store_true", help=argparse.SUPPRESS)  # --toggle's background half
+    listen.add_argument("--max-seconds", type=float,
+                        help="longest recording (default 60, or 1800 with --toggle)")
     listen.add_argument("--silence", type=float, default=1.5, help="seconds of quiet that end it (default 1.5)")
     listen.add_argument("--no-copy", action="store_true", help="print only")
+    listen.add_argument("--paste", action="store_true",
+                        help="with --toggle: also paste at the cursor when it stops (the clipboard keeps the text)")
     listen.add_argument("--force", action="store_true", help="load even under critical memory pressure")
 
     sub.add_parser("setup", help="download the default models")
@@ -60,7 +67,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "listen":
             from voice import listen as cmd
 
-            return cmd.run(args.max_seconds, args.silence, not args.no_copy, args.force)
+            copy = not args.no_copy
+            if args.toggle or args.until_stopped:
+                limit = args.max_seconds or 1800.0
+                if args.until_stopped:
+                    return cmd.run_until_stopped(limit, copy, args.force, args.paste)
+                return cmd.toggle(limit, copy, args.force, args.paste)
+            return cmd.run(args.max_seconds or 60.0, args.silence, copy, args.force)
         from voice import setup as cmd
 
         return cmd.run()
