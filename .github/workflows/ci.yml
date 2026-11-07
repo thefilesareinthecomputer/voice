@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+    branches: [main]  # other branches run through their pull request, so each job runs once
+    paths-ignore: [README.md, CHANGELOG.md]
+  pull_request:
+    paths-ignore: [README.md, CHANGELOG.md]
+  workflow_dispatch:
+  schedule:
+    # Weekly, Monday 13:00 UTC: catches newly published CVEs in the locked dependencies.
+    - cron: "0 13 * * 1"
+
+permissions:
+  contents: read
+
+# Actions are pinned to commit SHAs (the comment names the tag); Dependabot keeps them current.
+jobs:
+  test:
+    # MLX needs Apple Silicon, so the tests run on an arm64 macOS runner. They fake the models,
+    # microphone and speaker, so nothing is downloaded and no audio device is needed.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
+      - run: uv sync --locked
+      - run: uv run ruff check
+      - run: uv run python -m unittest discover -s tests -v
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
+      - name: Known vulnerabilities in the locked dependencies
+        # The export is already the full pinned list, so pip-audit checks it as-is (--no-deps)
+        # without installing or resolving anything (--disable-pip).
+        run: |
+          uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file requirements.txt
+          uvx pip-audit==2.10.1 --requirement requirements.txt --disable-pip --no-deps

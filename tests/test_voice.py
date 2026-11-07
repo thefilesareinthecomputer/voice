@@ -37,11 +37,10 @@ class TestLoaded(unittest.TestCase):
     def test_model_is_released_after_the_block_even_on_error(self) -> None:
         loader = mock.Mock(return_value="model")
         with mock.patch.dict(os.environ, {"VOICE_PRESSURE_LEVEL": "1"}), \
-                mock.patch.object(models, "release") as release:
-            with self.assertRaises(ValueError):
-                with models.loaded(loader, "some/repo") as model:
-                    self.assertEqual(model, "model")
-                    raise ValueError
+                mock.patch.object(models, "release") as release, self.assertRaises(ValueError), \
+                models.loaded(loader, "some/repo") as model:
+            self.assertEqual(model, "model")
+            raise ValueError
         loader.assert_called_once_with("some/repo")
         release.assert_called_once()
 
@@ -49,13 +48,11 @@ class TestLoaded(unittest.TestCase):
         loader = mock.Mock()
         with mock.patch.dict(os.environ, {"VOICE_PRESSURE_LEVEL": "4"}, clear=False):
             os.environ.pop("HF_HUB_OFFLINE", None)
-            with self.assertRaises(models.MemoryPressure):
-                with models.loaded(loader, "some/repo"):
-                    pass
+            with self.assertRaises(models.MemoryPressure), models.loaded(loader, "some/repo"):
+                pass
         loader.assert_not_called()
-        with mock.patch.dict(os.environ, {"VOICE_PRESSURE_LEVEL": "1"}):
-            with models.loaded(loader, "some/repo"):
-                self.assertEqual(os.environ.get("HF_HUB_OFFLINE"), "1")
+        with mock.patch.dict(os.environ, {"VOICE_PRESSURE_LEVEL": "1"}), models.loaded(loader, "some/repo"):
+            self.assertEqual(os.environ.get("HF_HUB_OFFLINE"), "1")
 
 
 class TestEndOfSpeech(unittest.TestCase):
@@ -115,19 +112,17 @@ class TestLoading(unittest.TestCase):
     def test_background_load_is_released_even_on_error(self) -> None:
         loader = mock.Mock(return_value="model")
         with mock.patch.dict(os.environ, {"VOICE_PRESSURE_LEVEL": "1"}), \
-                mock.patch.object(models, "release") as release:
-            with self.assertRaises(ValueError):
-                with models.loading(loader, "some/repo") as pending:
-                    self.assertEqual(pending.result(), "model")
-                    raise ValueError
+                mock.patch.object(models, "release") as release, self.assertRaises(ValueError), \
+                models.loading(loader, "some/repo") as pending:
+            self.assertEqual(pending.result(), "model")
+            raise ValueError
         release.assert_called_once()
 
     def test_refuses_before_loading_under_pressure(self) -> None:
         loader = mock.Mock()
-        with mock.patch.dict(os.environ, {"VOICE_PRESSURE_LEVEL": "4"}):
-            with self.assertRaises(models.MemoryPressure):
-                with models.loading(loader, "some/repo"):
-                    pass
+        with mock.patch.dict(os.environ, {"VOICE_PRESSURE_LEVEL": "4"}), \
+                self.assertRaises(models.MemoryPressure), models.loading(loader, "some/repo"):
+            pass
         loader.assert_not_called()
 
 
@@ -170,6 +165,19 @@ class TestCli(unittest.TestCase):
         with mock.patch("voice.speak.run", return_value=0) as run:
             self.assertEqual(cli.main(["speak", "--voice", "bf_emma", "--speed", "1.1", "the reply"]), 0)
         run.assert_called_once_with("the reply", stop=False, force=False, voice="bf_emma", speed=1.1)
+
+    def test_every_command_but_setup_runs_offline_before_any_import(self) -> None:
+        probe = ("import os, sys; from unittest import mock; from voice import cli\n"
+                 "with mock.patch('voice.speak.run', return_value=0):\n"
+                 "    cli.main(['speak', 'x'])\n"
+                 "print(os.environ.get('HF_HUB_OFFLINE'), 'huggingface_hub' in sys.modules)")
+        result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True,
+                                env={**os.environ, "HF_HUB_OFFLINE": "0"})
+        self.assertEqual(result.stdout.split()[0], "1", result.stderr)
+        with mock.patch("voice.setup.run", return_value=0), mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HF_HUB_OFFLINE", None)
+            cli.main(["setup"])
+            self.assertNotIn("HF_HUB_OFFLINE", os.environ)
 
     def test_memory_pressure_exits_3(self) -> None:
         with mock.patch("voice.listen.run", side_effect=models.MemoryPressure("critical")):

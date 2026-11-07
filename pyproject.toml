@@ -6,6 +6,19 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = "MIT"
 license-files = ["LICENSE"]
+keywords = ["speech-to-text", "text-to-speech", "dictation", "mlx", "apple-silicon", "parakeet", "kokoro", "claude-code"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Environment :: MacOS X",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
 dependencies = [
     "misaki[en]>=0.9",
     "mlx-audio>=0.5.4,<0.6",
@@ -15,8 +28,18 @@ dependencies = [
     "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
 ]
 
+[project.urls]
+Repository = "https://github.com/thefilesareinthecomputer/voice"
+Issues = "https://github.com/thefilesareinthecomputer/voice/issues"
+Changelog = "https://github.com/thefilesareinthecomputer/voice/blob/main/CHANGELOG.md"
+
 [project.scripts]
 voice = "voice.cli:main"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+]
 
 [build-system]
 requires = ["uv_build>=0.11.19,<0.12"]
@@ -35,3 +58,11 @@ constraint-dependencies = [
     "mlx-audio==0.5.4",
     "mlx==0.32.2",
 ]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]

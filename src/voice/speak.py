@@ -3,6 +3,7 @@ so the latest reply always wins."""
 
 from __future__ import annotations
 
+import contextlib
 import os
 import signal
 import subprocess
@@ -25,10 +26,8 @@ def stop_previous() -> None:
     # Only signal the pid if it is still a speaker, never a reused pid.
     ps = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True)
     if "voice" in ps.stdout and "speak" in ps.stdout:
-        try:
+        with contextlib.suppress(ProcessLookupError):
             os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
 
 
 def settings(voice: str | None = None, speed: float | None = None) -> tuple[str, float, str]:

@@ -12,6 +12,7 @@ Each command loads its model, does one job and releases it before it exits.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from voice import models
@@ -40,6 +41,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("setup", help="download the default models")
 
     args = parser.parse_args(argv)
+    if args.command != "setup":
+        # Before anything imports huggingface_hub, which reads this once at import:
+        # only `setup` may reach the network.
+        os.environ["HF_HUB_OFFLINE"] = "1"
     try:
         if args.command == "speak":
             from voice import speak as cmd

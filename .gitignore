@@ -1,5 +1,24 @@
+# Environments and build output
 .venv/
 __pycache__/
 *.egg-info/
 dist/
+build/
+requirements.txt
+
+# Models and audio never live in the repository; models download to the Hugging Face cache.
+*.safetensors
+*.npz
+*.pt
+*.bin
+*.gguf
+*.onnx
 *.wav
+*.mp3
+*.m4a
+models/
+
+# Editors and the OS
+.DS_Store
+.idea/
+.vscode/
