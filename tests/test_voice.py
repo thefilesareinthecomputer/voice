@@ -502,7 +502,9 @@ class TestToggle(TempState):
         popen.assert_not_called()
         cue.assert_called_once_with("error")
         self.assertEqual(notes[-1][0], "voice: not started")
-        with mock.patch.object(models, "require", side_effect=models.ModelMissing("run `voice setup` first")), \
+        # Pressure is checked first, so pin it to normal here or the machine's own level decides.
+        with mock.patch.dict(os.environ, {"VOICE_PRESSURE_LEVEL": "1"}), \
+                mock.patch.object(models, "require", side_effect=models.ModelMissing("run `voice setup` first")), \
                 mock.patch.object(listen.subprocess, "Popen") as popen, \
                 mock.patch.object(listen, "cue"), \
                 mock.patch.object(listen, "notify", side_effect=lambda t, m: notes.append((t, m))):

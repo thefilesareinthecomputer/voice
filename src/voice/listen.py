@@ -174,6 +174,7 @@ def words(text: str) -> str:
 def run(max_seconds: float = 60.0, silence: float = 1.5, clipboard: bool = True, force: bool = False) -> int:
     """Record until a pause, in the foreground. The model loads while the speaker talks,
     so the wait after the pause is only the transcription."""
+    models.check_pressure(force)  # the cheap refusal first, whether or not a model is installed
     models.require(models.stt_model())  # before the recording, not after it
     with models.loading(models.load_stt, models.stt_model(), force) as pending:
         print("listening... (stops after a pause)", file=sys.stderr)
@@ -197,8 +198,8 @@ def toggle(max_seconds: float, clipboard: bool, force: bool, paste_too: bool = F
             os.kill(pid, signal.SIGUSR1)
         return 0
     try:
-        models.require(models.stt_model())
         models.check_pressure(force)
+        models.require(models.stt_model())
     except models.ModelMissing as exc:
         cue("error")
         notify("voice: not started", f"{exc}.")
