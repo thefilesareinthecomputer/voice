@@ -15,7 +15,12 @@ uv run python -m unittest discover -s tests
 uv run ruff check
 ```
 
-To try your changes as the installed command, run `uv tool install --editable .` from the clone.
+To try your changes as the installed command, install it editable from the clone, pinned to the lock as in the README:
+
+```bash
+uv export --frozen --no-dev --no-emit-project --output-file requirements.txt
+uv tool install --editable --constraints requirements.txt .
+```
 
 ## What every change needs
 

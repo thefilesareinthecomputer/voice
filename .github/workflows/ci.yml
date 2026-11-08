@@ -20,18 +20,30 @@ jobs:
     # MLX needs Apple Silicon, so the tests run on an arm64 macOS runner. They fake the models,
     # microphone and speaker, so nothing is downloaded and no audio device is needed.
     runs-on: macos-14
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false  # nothing later in the job needs the token
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
+        with:
+          version: "0.11.19"  # the uv that wrote uv.lock
       - run: uv sync --locked
       - run: uv run ruff check
       - run: uv run python -m unittest discover -s tests -v
 
   audit:
-    runs-on: ubuntu-latest
+    # On macOS too: the export marks MLX's packages darwin-only, and pip-audit skips a package
+    # whose marker does not match the machine it runs on.
+    runs-on: macos-14
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
+        with:
+          version: "0.11.19"  # the uv that wrote uv.lock
       - name: Known vulnerabilities in the locked dependencies
         # The export is already the full pinned list, so pip-audit checks it as-is (--no-deps)
         # without installing or resolving anything (--disable-pip).

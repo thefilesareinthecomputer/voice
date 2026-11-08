@@ -7,8 +7,44 @@ All notable changes to this project are listed here. The format follows [Keep a 
 ### Added
 
 - `voice listen --toggle` for a keyboard shortcut: the first press starts a background recording with a sound and a notification, the next press stops it, and the text is transcribed and copied. No silence cutoff; a recording stops on its own after 30 minutes.
-- `--paste` also pastes the text at the cursor when a toggle recording stops, and keeps it on the clipboard.
+- `--paste` also pastes the text at the cursor when a toggle recording stops, and keeps it on the clipboard. It is opt-in; the README explains the System Events permission it asks for.
 - Recordings longer than a minute are transcribed in chunks where the model supports it.
+- `voice shrink` writes a 16-bit copy of the speech-to-text model: half the size on disk and about 0.3 GB less memory while it transcribes.
+- `integrations/claude-code/` holds a Claude Code hook that reads a short summary of each reply aloud through `voice speak`, sending the text on stdin, and a `/voice` command that turns it on and off.
+- `--preload` with `--toggle` loads the model while you talk, for a shorter wait after the stop press.
+- `VOICE_TTS_MODEL` names the text-to-speech model; `VOICE_MODEL` still works.
+- A Troubleshooting section in the README.
+
+### Changed
+
+- The start sound and notification come once the microphone is open, and notifications no longer hold up the recording, so the first words are no longer lost.
+- MLX and the Parakeet code import while you talk, which shortens the wait after the stop press.
+- Takes transcribe one at a time, so a quick second take never loads a second model or overwrites a newer clipboard.
+- A start that is refused (critical memory pressure, a missing model) says so with the error sound and a notification.
+- Critical memory pressure at the stop press waits up to a minute and then transcribes, instead of discarding the recording.
+- A silent take skips the model, and an all-zero one points at the microphone permission.
+- A missing model says to run `voice setup`, for `listen`, `speak` and `voices` alike; `setup` skips local folders and prints what to do next.
+- The 16-bit copy from `voice shrink` is used without a setting once it exists.
+- `voice speak` makes each sentence while the last one plays, a stop ends playback at once, and a request that waited for its turn steps aside for a newer one or a stop.
+- Numbers on the command line must be finite and in range, and flag combinations that would do nothing (`--toggle --no-copy`, `--paste` without `--toggle`, `--stop` with text) are refused. `voice speak` with no text on a terminal shows its usage instead of waiting.
+- The Claude Code hook speaks only a summary line that ends the reply, stays silent without one, says "Voice is on." when turned on, and keeps underscores inside words.
+
+### Security
+
+- Models load only through the Kokoro and Parakeet loaders, whatever `VOICE_MODEL` or `VOICE_STT_MODEL` names, so a model can no longer steer mlx-audio into a family that runs code shipped with it.
+- A pid file counts only while its process holds a lock on it, so the pid of an exited process is never signalled, a pid of 1 or less never is, and two quick presses can no longer start two recorders. The background half accepts only its own lock as `--until-stopped`, and a symlinked state folder is refused.
+- The default models download and load at pinned revisions, and every load gets a resolved folder, so a folder in the current directory can never stand in for a repo name.
+- `voice shrink` copies a model's side files only from the model folder or its own cache blobs, writes a private folder, and quotes the setting it prints.
+- The Claude Code hook reads `~/.claude/voice.json` only; no environment variable can point it at another config.
+- A failure notification names the log file instead of quoting the error, and the log records the error's type and stack without its message, so neither can hold what was said.
+- The CI vulnerability audit runs on macOS, where the MLX packages' darwin-only markers match, and checkout keeps no credentials.
+- The background recorder starts in isolated mode (`python -I`) from the state folder, so it never imports from the folder the shortcut ran in or from `PYTHONPATH`.
+- `pbcopy`, `osascript`, `afplay` and `sysctl` run by absolute path, never through `PATH`.
+- The state folder is readable only by its owner, and the pid and log files refuse symlinks.
+- Notifications give a word count instead of the start of the transcript, because macOS keeps notification text.
+- A transcript goes on the clipboard marked `org.nspasteboard.ConcealedType`, so clipboard-history apps that follow the convention leave it out of their history; plain `pbcopy` remains the fallback.
+- The spaCy model's download URL includes its hash, and the README installs from the lock.
+- A voice plays from the loaded model's own `voices` folder, and only a voice `voice voices` lists; before, mlx-audio looked the name up in its own default repo, so most voices failed offline.
 
 ## 0.1.0 - 2026-11-06
 

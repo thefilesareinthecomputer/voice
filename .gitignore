@@ -16,7 +16,15 @@ requirements.txt
 *.wav
 *.mp3
 *.m4a
+*.aiff
+*.flac
+*.ogg
+*.caf
 models/
+
+# Logs and local secrets
+*.log
+.env
 
 # Editors and the OS
 .DS_Store
