@@ -19,7 +19,7 @@ jobs:
   test:
     # MLX needs Apple Silicon, so the tests run on an arm64 macOS runner. They fake the models,
     # microphone and speaker, so nothing is downloaded and no audio device is needed.
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -35,7 +35,7 @@ jobs:
   audit:
     # On macOS too: the export marks MLX's packages darwin-only, and pip-audit skips a package
     # whose marker does not match the machine it runs on.
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
