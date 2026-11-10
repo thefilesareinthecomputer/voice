@@ -50,15 +50,17 @@ def end_of_speech(levels: list[float], silence: float, threshold: float = SPEECH
 
 
 def record(max_seconds: float, silence: float | None, stop: Callable[[], bool] | None = None,
-           on_open: Callable[[], None] | None = None) -> np.ndarray:
+           on_open: Callable[[], None] | None = None, patience: float | None = None) -> np.ndarray:
     """Record mono 16 kHz audio until `silence` seconds of quiet after speech (never, when None),
-    until `stop()` turns true, or until `max_seconds`. `on_open` runs once the microphone is
-    open, so a start cue never plays before the first word can be heard."""
+    until `stop()` turns true, until `patience` seconds pass with no speech at all, or until
+    `max_seconds`. `on_open` runs once the microphone is open, so a start cue never plays
+    before the first word can be heard."""
     import numpy as np
     import sounddevice as sd
 
     frames: list[np.ndarray] = []
     levels: list[float] = []
+    spoke = False
     block = int(RATE * FRAME)
     with sd.InputStream(samplerate=RATE, channels=1, dtype="float32", blocksize=block) as stream:
         if on_open:
@@ -67,7 +69,10 @@ def record(max_seconds: float, silence: float | None, stop: Callable[[], bool] |
             chunk, _ = stream.read(block)
             frames.append(chunk[:, 0].copy())
             levels.append(float(np.sqrt(np.mean(chunk ** 2))))
+            spoke = spoke or levels[-1] > SPEECH_LEVEL
             if silence is not None and end_of_speech(levels, silence):
+                break
+            if patience is not None and not spoke and len(levels) * FRAME >= patience:
                 break
     return np.concatenate(frames) if frames else np.zeros(0, dtype="float32")
 

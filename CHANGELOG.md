@@ -6,6 +6,8 @@ All notable changes to this project are listed here. The format follows [Keep a 
 
 ### Added
 
+- `voice chat` runs Claude Code in the terminal with a hands-free spoken loop. Claude speaks a short summary of each reply, the microphone opens once playback ends, and a pause of three seconds, or whatever `--silence` sets, submits what you said. Any key takes over from the loop, and Control+Q turns it off and on. `voice chat --toggle` does the same from a global keyboard shortcut. It needs no change to `~/.claude`.
+- A background speaker: `voice speak --warm` keeps Kokoro loaded, so speech starts in about half a second instead of about four, and `voice speak --release` frees it. `voice serve` runs it in the foreground.
 - `voice listen --toggle` for a keyboard shortcut: the first press starts a background recording with a sound and a notification, the next press stops it, and the text is transcribed and copied. No silence cutoff; a recording stops on its own after 30 minutes.
 - `--paste` also pastes the text at the cursor when a toggle recording stops, and keeps it on the clipboard. It is opt-in; the README explains the System Events permission it asks for.
 - Recordings longer than a minute are transcribed in chunks where the model supports it.

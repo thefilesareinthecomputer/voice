@@ -2,13 +2,17 @@
 
     voice speak "text"     read the text aloud (or text on stdin)
     voice speak --stop     stop whatever is playing
+    voice speak --warm     keep the speaking model loaded in the background, so speech starts at once
+    voice speak --release  stop the background speaker and free its memory
     voice voices           list the speaking voices (pick one with speak --voice)
     voice listen           record until a pause, transcribe, print and copy to the clipboard
     voice listen --toggle  start recording in the background, or stop it and copy the text
+    voice chat             talk with Claude Code hands-free in this terminal; other options go to claude
     voice setup            download the default models once; every other command runs offline
     voice shrink           write a 16-bit copy of the speech-to-text model: half the size, less memory
 
-Each command loads its model, does one job and releases it before it exits.
+Each command loads its model, does one job and releases it before it exits, except the
+background speaker and voice chat, which hold theirs until they are stopped.
 """
 
 from __future__ import annotations
@@ -47,6 +51,12 @@ def main(argv: list[str] | None = None) -> int:
     speak.add_argument("--voice", help="speaking voice, such as af_heart or bf_emma (see `voice voices`)")
     speak.add_argument("--speed", type=number(0.5, 2.0), help="speaking speed from 0.5 to 2.0; 1.0 is normal")
     speak.add_argument("--force", action="store_true", help="load even under critical memory pressure")
+    speak.add_argument("--warm", action="store_true",
+                       help="start the resident speaker in the background (about 450 MB), so speech starts at once")
+    speak.add_argument("--release", action="store_true", help="stop playback and the resident speaker, freeing it")
+
+    serve = sub.add_parser("serve", help="run the resident speaker in the foreground (speak --warm starts it)")
+    serve.add_argument("--force", action="store_true", help="load even under critical memory pressure")
 
     sub.add_parser("voices", help="list the speaking voices in the local cache")
 
@@ -67,12 +77,23 @@ def main(argv: list[str] | None = None) -> int:
                              "press; holds about 1.7 GB for the whole recording")
     listen.add_argument("--force", action="store_true", help="load even under critical memory pressure")
 
+    chat = sub.add_parser("chat", help="talk with Claude Code hands-free in this terminal",
+                          description="Runs claude with a spoken loop. Options voice does not know go to claude.")
+    chat.add_argument("--force", action="store_true", help="load even under critical memory pressure")
+    chat.add_argument("--silence", type=number(0.2, 30),
+                      help="seconds of quiet that end your turn (default 3)")
+    chat.add_argument("--toggle", action="store_true",
+                      help="turn the loop of the running voice chat off or on; for a global keyboard shortcut")
+    chat.add_argument("--hook", action="store_true", help=argparse.SUPPRESS)  # run by Claude Code, not by hand
+
     sub.add_parser("setup", help="download the default models")
 
     shrink = sub.add_parser("shrink", help="write a 16-bit copy of the speech-to-text model")
     shrink.add_argument("--force", action="store_true", help="run even under critical memory pressure")
 
-    args = parser.parse_args(argv)
+    args, passthrough = parser.parse_known_args(argv)
+    if passthrough and (args.command != "chat" or args.toggle):
+        parser.error(f"unrecognized arguments: {' '.join(passthrough)}")
     if args.command == "listen":
         background = args.toggle or args.until_stopped is not None
         if background and args.no_copy:
@@ -82,8 +103,11 @@ def main(argv: list[str] | None = None) -> int:
         for flag in ("paste", "preload"):
             if getattr(args, flag) and not background:
                 listen.error(f"--{flag} works only with --toggle")
-    if args.command == "speak" and args.stop and args.text:
-        speak.error("--stop takes no text")
+    if args.command == "speak":
+        if (args.stop or args.release) and args.text:
+            speak.error("--stop and --release take no text")
+        if args.warm and (args.stop or args.release):
+            speak.error("--warm starts the speaker; --stop and --release end playback")
     if args.command != "setup":
         # Before anything imports huggingface_hub, which reads this once at import:
         # only `setup` may reach the network.
@@ -93,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
             from voice import speak as cmd
 
             text = " ".join(args.text) if args.text else None
-            if text is None and not args.stop:
+            if text is None and not (args.stop or args.release or args.warm):
                 if sys.stdin.isatty():
                     speak.print_usage(sys.stderr)
                     print("voice speak: give the text as arguments or on stdin", file=sys.stderr)
@@ -102,7 +126,12 @@ def main(argv: list[str] | None = None) -> int:
                 if len(text) > MAX_TEXT:
                     print(f"voice speak: the text on stdin is over {MAX_TEXT:,} characters", file=sys.stderr)
                     return 2
-            return cmd.run(text, stop=args.stop, force=args.force, voice=args.voice, speed=args.speed)
+            return cmd.run(text, stop=args.stop, force=args.force, voice=args.voice, speed=args.speed,
+                           warm=args.warm, release=args.release)
+        if args.command == "serve":
+            from voice import serve as cmd
+
+            return cmd.run(force=args.force)
         if args.command == "voices":
             from voice import speak as cmd
 
@@ -120,6 +149,14 @@ def main(argv: list[str] | None = None) -> int:
                 return cmd.toggle(limit, copy, args.force, args.paste, args.preload)
             return cmd.run(args.max_seconds if args.max_seconds is not None else 60.0,
                            args.silence if args.silence is not None else 1.5, copy, args.force)
+        if args.command == "chat":
+            from voice import chat as cmd
+
+            if args.hook:
+                return cmd.hook()
+            if args.toggle:
+                return cmd.toggle_running()
+            return cmd.run(passthrough, force=args.force, silence=args.silence or cmd.SILENCE)
         if args.command == "shrink":
             from voice import shrink as cmd
 

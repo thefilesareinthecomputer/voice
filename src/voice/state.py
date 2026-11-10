@@ -57,6 +57,21 @@ def write_pid(fd: int, pid: int) -> None:
     os.pwrite(fd, str(pid).encode(), 0)
 
 
+def locked(path: Path) -> bool:
+    """True while any live process holds the lock on `path`, whether or not it has written its pid."""
+    try:
+        fd = _open(path)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
+    return False
+
+
 def holder(path: Path) -> int | None:
     """The pid in `path` while a live process holds its lock; None when nobody does, while the
     holder has not written its pid yet, or when the file names no ordinary process (1 or less,

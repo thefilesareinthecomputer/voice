@@ -31,6 +31,7 @@ uv tool install --editable --constraints requirements.txt .
 
 ## Design rules
 
-- One process per call: a command loads its model, does one job and releases it before it exits. Nothing stays resident.
+- One process per call: a command loads its model, does one job and releases it before it exits. A model stays resident only in a mode the user turned on and can turn off: the background speaker (`voice speak --warm` and `--release`) and the `voice chat` loop.
+- Check memory pressure before every model load, and never load a real model in a test.
 - No network at run time. Only `voice setup` downloads, and every other command loads models from the local cache.
 - No model weights, audio or other large files in the repository.

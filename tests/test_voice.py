@@ -17,39 +17,8 @@ from unittest import mock
 
 import numpy as np
 
+from support import VOICE, FakeStream, TempState
 from voice import cli, listen, models, setup, shrink, speak, state
-
-VOICE = [sys.executable, "-m", "voice.cli"]
-
-
-class TempState(unittest.TestCase):
-    """Points the state folder and the pid and log files at a temporary folder."""
-
-    def setUp(self) -> None:
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.state = Path(tmp.name) / "claude-voice"
-        for patcher in (mock.patch.object(state, "STATE", self.state),
-                        mock.patch.multiple(listen, PIDFILE=self.state / "listen.pid", LOG=self.state / "listen.log",
-                                            TRANSCRIBING=self.state / "transcribe.lock"),
-                        mock.patch.multiple(speak, PIDFILE=self.state / "speak.pid",
-                                            TICKET=self.state / "speak.latest")):
-            patcher.start()
-            self.addCleanup(patcher.stop)
-
-    def held(self, path: Path, pid: int | None) -> int:
-        """Hold the lock on `path` as a running process would, optionally with its pid written."""
-        fd = state.hold(path)
-        self.assertIsNotNone(fd)
-        if pid is not None:
-            state.write_pid(fd, pid)
-        self.addCleanup(_close, fd)
-        return fd
-
-
-def _close(fd: int) -> None:
-    with contextlib.suppress(OSError):  # a test may have closed it already
-        os.close(fd)
 
 
 class TestPidLock(TempState):
@@ -292,23 +261,6 @@ class TestTranscribe(unittest.TestCase):
                 mock.patch.object(listen, "record") as record, self.assertRaises(models.ModelMissing):
             listen.run()
         record.assert_not_called()
-
-
-class FakeStream:
-    """Stands in for sounddevice.InputStream: hands back quiet blocks."""
-
-    def __init__(self, **kwargs) -> None:
-        self.reads = 0
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc) -> None:
-        return None
-
-    def read(self, n: int):
-        self.reads += 1
-        return np.zeros((n, 1), dtype="float32"), False
 
 
 class TestToggle(TempState):
@@ -864,14 +816,41 @@ class TestCli(unittest.TestCase):
         with mock.patch("voice.speak.run", return_value=0) as run, \
                 mock.patch("sys.stdin", io.StringIO("from stdin\n")):
             self.assertEqual(cli.main(["speak"]), 0)
-        run.assert_called_once_with("from stdin\n", stop=False, force=False, voice=None, speed=None)
+        run.assert_called_once_with("from stdin\n", stop=False, force=False, voice=None, speed=None,
+                                    warm=False, release=False)
 
     def test_configured_flags_and_text_on_stdin_reach_the_speaker(self) -> None:
         # the Claude Code hook runs the configured command, flags included, and writes the text to stdin
         with mock.patch("voice.speak.run", return_value=0) as run, \
                 mock.patch("sys.stdin", io.StringIO("the reply")):
             self.assertEqual(cli.main(["speak", "--voice", "bf_emma", "--speed", "1.1"]), 0)
-        run.assert_called_once_with("the reply", stop=False, force=False, voice="bf_emma", speed=1.1)
+        run.assert_called_once_with("the reply", stop=False, force=False, voice="bf_emma", speed=1.1,
+                                    warm=False, release=False)
+
+    def test_chat_passes_options_it_does_not_know_to_claude_and_no_other_command_does(self) -> None:
+        with mock.patch("voice.chat.run", return_value=0) as run:
+            self.assertEqual(cli.main(["chat", "--model", "haiku", "--force"]), 0)
+        run.assert_called_once_with(["--model", "haiku"], force=True, silence=3.0)
+        with mock.patch("voice.chat.run", return_value=0) as run:
+            self.assertEqual(cli.main(["chat", "--silence", "5", "--continue"]), 0)
+        run.assert_called_once_with(["--continue"], force=False, silence=5.0)
+        with mock.patch("voice.chat.toggle_running", return_value=0) as toggle:
+            self.assertEqual(cli.main(["chat", "--toggle"]), 0)
+        toggle.assert_called_once_with()
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            cli.main(["chat", "--toggle", "--model", "haiku"])
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            cli.main(["voices", "--model", "haiku"])
+
+    def test_warm_and_release_take_no_text_and_need_no_stdin(self) -> None:
+        with mock.patch("voice.speak.run", return_value=0) as run, mock.patch("sys.stdin", io.StringIO("")):
+            self.assertEqual(cli.main(["speak", "--warm"]), 0)
+            self.assertEqual(cli.main(["speak", "--release"]), 0)
+        self.assertTrue(run.call_args_list[0].kwargs["warm"])
+        self.assertTrue(run.call_args_list[1].kwargs["release"])
+        for argv in (["speak", "--release", "hi"], ["speak", "--warm", "--stop"]):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                cli.main(argv)
 
     def test_every_command_but_setup_runs_offline_before_any_import(self) -> None:
         probe = ("import os, sys; from unittest import mock; from voice import cli\n"
