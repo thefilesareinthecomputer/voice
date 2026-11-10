@@ -143,7 +143,7 @@ Any option `voice` doesn't know goes to `claude`, such as `--model` or `--resume
 
 - **You can work in other apps meanwhile.** Your words are typed into Claude's own terminal, not the window in front, so the terminal can sit in the background. Closing it ends the session. Approving a permission request still needs that terminal.
 - **Typing always takes over.** Any key you press while it talks or listens stops that, and the key still goes to Claude. Moving or clicking the mouse does not. After Escape or Control+C stops Claude, or after a command such as `/clear`, the microphone opens again on its own.
-- **Control+Q turns the loop off and on.** So does saying "voice chat off" on its own. After 30 seconds with no words, it turns off by itself, with a sound and a notification. A click, a cough or other noise without words doesn't end your turn.
+- **Control+Q turns the loop off and on.** While it speaks or listens, Control+Q turns it off. While it's on but waiting, Control+Q starts listening. Saying "voice chat off" on its own also turns it off. After 30 seconds with no words, it turns off by itself, with a sound and a notification. A click, a cough or other noise without words doesn't end your turn.
 - **One voice chat listens at a time.** Starting a voice chat, or turning one on, switches any other voice chat to plain typing, with a notification.
 - **Sounds mark each step.** A tick means the microphone is open. A pop means it closed and your words are on their way.
 - **The microphone never hears `voice` itself.** It opens only after the speaking and the on sound end, and it ignores what it hears while its tick plays, so its own sounds never count as you talking.

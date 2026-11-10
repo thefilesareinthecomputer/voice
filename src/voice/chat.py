@@ -113,6 +113,7 @@ class Session:
         self.busy = False       # Claude is working on a prompt
         self.phase = "idle"     # or "speaking" or "listening"
         self.generation = 0
+        self.pending: str | None = None  # a reply that came in while a summary played
 
     def start(self) -> None:
         if self.fx.load():
@@ -130,13 +131,19 @@ class Session:
                 self.fx.notify("voice chat: moved", "Another voice chat is listening now. "
                                "This one is plain typing; press Control+Q here to take it back.")
         elif kind == "prompt":
+            # No cancel here: typing has already stopped any speech or listening, and a turn
+            # Claude starts itself (a background task or another agent finishing) must not cut
+            # off the summary playing or the user mid-sentence.
             self.busy = True
-            self._cancel()
         elif kind == "reply":
-            # No prompt event needs to come first: Claude starts some turns itself (a background
-            # task or another agent finishing), and their replies are spoken too.
+            # No prompt event needs to come first: Claude starts some turns itself, and their
+            # replies are spoken too.
             self.busy = False
-            if self.on and self.phase != "listening":  # never talk over the user
+            if not self.on or self.phase == "listening":  # never talk over the user
+                return
+            if self.phase == "speaking":
+                self.pending = event[1]  # after the summary playing, not over it
+            else:
                 self._reply(event[1])
         elif kind == "notice":
             # A permission request mid-turn. While idle the microphone may be open, so stay quiet.
@@ -145,7 +152,10 @@ class Session:
         elif kind == "spoken":
             if event[1] == self.generation and self.phase == "speaking":
                 self.phase = "idle"
-                if self.on and not self.busy:
+                pending, self.pending = self.pending, None
+                if self.on and pending is not None:
+                    self._reply(pending)
+                elif self.on and not self.busy:
                     self._listen()
         elif kind == "heard" and event[1] == self.generation and self.phase == "listening":
             self.phase = "idle"
@@ -164,6 +174,8 @@ class Session:
         for key in TOGGLE_KEYS:
             toggles += data.count(key)
             data = data.replace(key, b"")
+        for _ in range(toggles):  # first, so it sees what the loop was doing when pressed
+            self.toggle()
         typed = REPORTS.sub(b"", data)
         if self.phase != "idle" and typed:
             self._cancel()
@@ -172,13 +184,17 @@ class Session:
             self.fx.later(RESUME_SECONDS, ("resume", self.generation))
         elif self.on and not self.busy and typed.endswith(ENTER_KEYS):
             self.fx.later(RESUME_SECONDS, ("resume", self.generation))
-        for _ in range(toggles):
-            self.toggle()
         return data
 
     def toggle(self) -> None:
-        if self.on:
+        """Control+Q, or the global shortcut. While the loop speaks or listens it turns the loop off.
+        While the loop is on but waiting, as it is after an interruption, it starts listening: a
+        press that turned the loop off there would only look like nothing happened."""
+        if self.on and self.phase != "idle":
             self._turn_off()
+        elif self.on:
+            self.fx.cue("on")
+            self._listen()
         elif self.fx.load():
             self.on = True
             self.fx.claim()
@@ -220,6 +236,7 @@ class Session:
         elif self.phase == "listening":
             self.fx.stop_listening()
         self.phase = "idle"
+        self.pending = None
         self.generation += 1
 
     def _turn_off(self, paused: bool = False) -> None:

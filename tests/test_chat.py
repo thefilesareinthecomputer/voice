@@ -48,13 +48,19 @@ class TestSession(TempState):
     def listening_generation(self) -> int:
         return [c for c in self.fx.calls if c[0] == "listen"][-1][1]
 
+    def asked(self, session: chat.Session | None = None) -> None:
+        """The user speaks a request: it is heard and submitted, and Claude Code reports the prompt."""
+        session = session or self.session
+        session.handle(("heard", session.generation, "do it"))
+        session.handle(("prompt",))
+
     def test_it_starts_on_and_listening(self) -> None:
         fx = FakeEffects()
         chat.Session(fx).start()
         self.assertEqual(fx.names(), ["load", "claim", "listen"])  # claim: other loops turn off
 
     def test_a_reply_is_spoken_then_the_microphone_opens(self) -> None:
-        self.session.handle(("prompt",))
+        self.asked()
         self.session.handle(("reply", "Done.\n<speak>I fixed the test.</speak>"))
         say = [c for c in self.fx.calls if c[0] == "say"][-1]
         self.assertEqual(say[1], "I fixed the test.")
@@ -63,7 +69,7 @@ class TestSession(TempState):
         self.assertEqual(self.fx.names()[-1], "listen")
 
     def test_a_reply_without_a_summary_goes_straight_to_listening(self) -> None:
-        self.session.handle(("prompt",))
+        self.asked()
         self.session.handle(("reply", "No summary here."))
         self.assertNotIn("say", self.fx.names())
         self.assertEqual(self.fx.names()[-1], "listen")
@@ -73,7 +79,7 @@ class TestSession(TempState):
         self.assertEqual(self.fx.calls[-1], ("submit", "run the tests"))
 
     def listening_generation_after_reply(self) -> int:
-        self.session.handle(("prompt",))
+        self.asked()
         self.session.handle(("reply", "x"))
         return self.listening_generation()
 
@@ -89,6 +95,7 @@ class TestSession(TempState):
 
     def test_a_late_result_from_a_cancelled_listen_is_dropped(self) -> None:
         gen = self.listening_generation_after_reply()
+        self.fx.calls.clear()
         self.assertEqual(self.session.keys(b"a"), b"a")  # typing takes over
         self.assertIn("stop_listening", self.fx.names())
         self.session.handle(("heard", gen, "too late"))
@@ -118,7 +125,7 @@ class TestSession(TempState):
         self.assertIn("stop_listening", self.fx.names())
 
     def test_a_key_while_speaking_stops_the_speech_and_still_reaches_claude(self) -> None:
-        self.session.handle(("prompt",))
+        self.asked()
         self.session.handle(("reply", "<speak>Long summary.</speak>"))
         gen = [c for c in self.fx.calls if c[0] == "say"][-1][2]
         self.assertEqual(self.session.keys(b"y"), b"y")
@@ -222,17 +229,39 @@ class TestSession(TempState):
         self.session.handle(("reply", "<speak>Hi.</speak>"))
         self.assertEqual(self.fx.calls, [])
 
-    def test_a_prompt_cancels_speech_and_listening(self) -> None:
-        self.session.handle(("prompt",))  # typed while the microphone was open
-        self.assertIn("stop_listening", self.fx.names())
-        self.session.handle(("reply", "<speak>Hi.</speak>"))
-        self.session.handle(("prompt",))  # typed while the summary played
-        self.assertIn("stop_speech", self.fx.names())
+    def test_a_turn_claude_starts_itself_cuts_off_neither_the_user_nor_the_summary(self) -> None:
+        # A background task or another agent finishing starts a turn with a prompt event.
+        self.session.handle(("prompt",))  # while the microphone is open
+        self.assertNotIn("stop_listening", self.fx.names())
+        self.asked()
+        self.session.handle(("reply", "<speak>First.</speak>"))
+        self.session.handle(("prompt",))  # while the summary plays
+        self.assertNotIn("stop_speech", self.fx.names())
+
+    def test_a_reply_that_lands_during_a_summary_is_spoken_after_it(self) -> None:
+        self.asked()
+        self.session.handle(("reply", "<speak>First.</speak>"))
+        first = [c for c in self.fx.calls if c[0] == "say"][-1]
+        self.session.handle(("reply", "<speak>Second.</speak>"))
+        self.assertEqual([c[1] for c in self.fx.calls if c[0] == "say"], ["First."])  # not over it
+        self.session.handle(("spoken", first[2]))
+        self.assertEqual(self.fx.calls[-1][:2], ("say", "Second."))
+
+    def test_control_q_on_a_loop_left_waiting_starts_listening(self) -> None:
+        # An interruption can leave the loop on but neither speaking nor listening; turning it
+        # off there would look like the press did nothing.
+        self.asked()
+        self.fx.calls.clear()
+        self.session.keys(b"\x11")
+        self.assertTrue(self.session.on)
+        self.assertEqual(self.fx.names(), ["cue", "listen"])
+        self.session.keys(b"\x11")  # now it is listening, so this press turns it off
+        self.assertFalse(self.session.on)
 
     def test_a_permission_request_is_spoken_only_while_claude_works(self) -> None:
         self.session.handle(("notice", "Claude needs your permission to use Bash"))
         self.assertNotIn("say", self.fx.names())  # idle: the microphone is open, so stay quiet
-        self.session.handle(("prompt",))
+        self.asked()
         self.session.handle(("notice", "Claude needs your permission to use Bash"))
         self.assertEqual(self.fx.calls[-1][:2], ("say", "Claude needs your permission to use Bash"))
 
