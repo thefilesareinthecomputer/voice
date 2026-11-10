@@ -1,7 +1,7 @@
 <h1 align="center">voice</h1>
 
 <p align="center">
-  Talk with Claude Code, dictate into any app, and have text read aloud. Every model runs on your own Mac.
+  Talk with Claude Code, dictate into any app, and have text read aloud. The speech models are fully local.
 </p>
 
 <p align="center">
@@ -28,6 +28,8 @@
 - `voice speak` reads text aloud.
 
 It runs open models through [mlx-audio](https://github.com/Blaizzy/mlx-audio) on your Mac. No audio or text goes to a server, and after setup it works offline.
+
+It doesn't need expensive hardware. It runs fast on an M1 MacBook Air with 16 GB of memory, the machine it was built and tested on.
 
 ## Install
 
