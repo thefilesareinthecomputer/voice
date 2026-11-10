@@ -4,8 +4,8 @@ the state folder. A cold `voice speak` takes about 4 s to first sound; through t
 server it takes about 0.3 s.
 
 It runs only while something asks for it: `voice speak --warm` starts it in the
-background and `voice speak --release` stops it and frees the model. The Claude Code
-hook ties both to `/voice on` and `/voice off`.
+background and `voice speak --release` stops it and frees the model. `voice chat` starts it
+for its session.
 
 One request at a time plays. A newer one, or a stop, ends the one playing, and the
 client of the ended request is told it is done, so `voice speak` keeps its old

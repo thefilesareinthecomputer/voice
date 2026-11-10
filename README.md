@@ -15,7 +15,6 @@
   <a href="#dictation"><b>Dictation</b></a> &nbsp;|&nbsp;
   <a href="#reading-aloud"><b>Reading aloud</b></a> &nbsp;|&nbsp;
   <a href="#voice-chat"><b>Voice chat</b></a> &nbsp;|&nbsp;
-  <a href="#claude-code"><b>Claude Code</b></a> &nbsp;|&nbsp;
   <a href="#a-smaller-dictation-model"><b>Smaller model</b></a> &nbsp;|&nbsp;
   <a href="#reference"><b>Reference</b></a>
 </p>
@@ -24,9 +23,9 @@
 
 `voice` is a small command-line tool for Apple Silicon Macs. It does three things:
 
+- `voice chat` lets you talk with Claude Code hands-free. You speak, and Claude answers out loud.
 - `voice listen` turns what you say into text on your clipboard.
 - `voice speak` reads text aloud.
-- `voice chat` lets you talk with Claude Code hands-free.
 
 Everything runs on your Mac through [mlx-audio](https://github.com/Blaizzy/mlx-audio), so no audio or text goes to a server.
 
@@ -44,6 +43,7 @@ Everything runs on your Mac through [mlx-audio](https://github.com/Blaizzy/mlx-a
 - About 3 GB of free disk space for the models.
 - [uv](https://docs.astral.sh/uv/), a Python package tool. Install it with `brew install uv` or [uv's installer](https://docs.astral.sh/uv/getting-started/installation/). uv downloads Python 3.12 for you if you don't have it.
 - Git. If it's missing, macOS offers to install it the first time you run `git`.
+- For `voice chat`: [Claude Code](https://code.claude.com/docs/en/overview), installed and signed in, so `claude` runs in your terminal.
 
 ### Steps
 
@@ -73,6 +73,17 @@ voice listen
 ```
 
 You should hear the sentence. Then `voice listen` waits for you to talk: say something, pause, and your words are printed. The first time, macOS asks whether your terminal may use the microphone. Allow it.
+
+### Talk with Claude Code
+
+There is nothing to connect. `voice chat` starts Claude Code for you, with voice built in:
+
+```bash
+cd ~/your-project
+voice chat
+```
+
+Talk after the tick, and pause for three seconds when you're done. Claude does the work, reads you a short summary, and listens for your reply. See [Voice chat](#voice-chat) for everything it does.
 
 ## Dictation
 
@@ -141,6 +152,8 @@ voice chat --silence 5      # wait for five seconds of quiet before ending your 
 
 Any option `voice` doesn't know goes to `claude`, such as `--model` or `--resume`.
 
+**Already in a Claude Code session?** Quit it, then run `voice chat --continue` in the same folder. The conversation picks up where it left off, now with voice. Voice can't attach to a session that is already running, because `voice chat` needs to start Claude itself.
+
 - **You can work in other apps meanwhile.** Your words are typed into Claude's own terminal, not the window in front, so the terminal can sit in the background. Closing it ends the session. Approving a permission request still needs that terminal.
 - **Typing always takes over.** Any key you press while it talks or listens stops that, and the key still goes to Claude. Moving or clicking the mouse does not. After Escape or Control+C stops Claude, or after a command such as `/clear`, the microphone opens again on its own.
 - **Control+Q turns the loop off and on.** While it speaks or listens, Control+Q turns it off. While it's on but waiting, Control+Q starts listening. Saying "voice chat off" on its own also turns it off. After 30 seconds with no words, it turns off by itself, with a sound and a notification. A click, a cough or other noise without words doesn't end your turn.
@@ -149,41 +162,9 @@ Any option `voice` doesn't know goes to `claude`, such as `--model` or `--resume
 - **The microphone never hears `voice` itself.** It opens only after the speaking and the on sound end, and it ignores what it hears while its tick plays, so its own sounds never count as you talking.
 - **A global shortcut works from any app.** This is a second shortcut, separate from dictation's. Bind `~/.local/bin/voice chat --toggle` to a key such as Control+Option+Command+C, the same way as [the dictation shortcut](#from-a-keyboard-shortcut). It turns the loop of the newest running session off or on. A terminal never passes Command shortcuts to the program inside it, so this is the only way to use one.
 
-Claude Code needs no setup for this. `voice chat` adds its hooks and its summary instruction to this one session through command-line flags, and nothing in `~/.claude` changes. Your terminal app needs microphone access, which macOS asks for the first time.
+Claude Code needs no setup for this. `voice chat` adds its hooks and its instruction to this one session through command-line flags, and nothing in `~/.claude` changes. The instruction tells Claude that you are talking by voice and asks it to end every reply with one `<speak>...</speak>` line of one to three plain sentences, and only that line is read aloud. Your terminal app needs microphone access, which macOS asks for the first time.
 
 While the loop is on, Parakeet holds about 1.7 GB and the background speaker about 450 MB more. Turning the loop off frees Parakeet, and quitting Claude stops the speaker if `voice chat` started it.
-
-## Claude Code
-
-This makes ordinary Claude Code sessions read a short summary of each reply aloud. `voice chat` handles its own speech, so it doesn't need any of this.
-
-While it's on, Claude ends every reply with a one-to-three sentence summary of what it did and what it needs from you, and only that summary is spoken. A reply without one stays silent, sending your next message stops the playback, and headless `claude -p` runs stay silent.
-
-The hook passes the summary to `voice speak` and returns at once. It reads its settings only from `~/.claude/voice.json`, and it needs only Python's standard library, so the `python3` that ships with macOS runs it. The `-I` flag keeps your environment variables and user packages from loading into it.
-
-1. Copy the hook into place:
-   ```bash
-   mkdir -p ~/.claude/hooks && cp -i integrations/claude-code/voice_reply.py ~/.claude/hooks/
-   ```
-2. Add it to the `hooks` key of `~/.claude/settings.json`, beside any hooks you already have:
-   ```json
-   {
-     "hooks": {
-       "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python3 -I ~/.claude/hooks/voice_reply.py", "timeout": 5}]}],
-       "Stop": [{"hooks": [{"type": "command", "command": "python3 -I ~/.claude/hooks/voice_reply.py", "timeout": 5}]}]
-     }
-   }
-   ```
-3. Create `~/.claude/voice.json`, naming `voice speak` and any voice you like:
-   ```json
-   {"enabled": true, "command": ["~/.local/bin/voice", "speak", "--voice", "af_heart"]}
-   ```
-4. Optionally, add the `/voice` command, which takes `on`, `off` and `status`. `on` says "Voice is on." aloud, so you know it works before the next reply:
-   ```bash
-   mkdir -p ~/.claude/commands && cp -i integrations/claude-code/voice.md ~/.claude/commands/
-   ```
-
-Each summary takes about 4 seconds to start unless the background speaker is running. Run `voice speak --warm` while voice is on, and each summary starts in about half a second. `voice speak --release` frees that memory again.
 
 ## A smaller dictation model
 
