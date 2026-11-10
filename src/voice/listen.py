@@ -29,6 +29,7 @@ if TYPE_CHECKING:  # numpy loads with the recording, not with every key press
 RATE = 16_000          # what every speech-to-text model here expects
 FRAME = 0.1            # seconds per level reading
 SPEECH_LEVEL = 0.01    # RMS above which a frame counts as speech
+CUE_SECONDS = 0.6      # the start sound lasts 0.56 s; afplay itself stays up about a second longer
 CHUNK_SECONDS = 60.0   # long recordings are transcribed in chunks of this length
 PRESSURE_WAIT = 60.0   # seconds a finished take waits for critical memory pressure to ease
 
@@ -50,11 +51,14 @@ def end_of_speech(levels: list[float], silence: float, threshold: float = SPEECH
 
 
 def record(max_seconds: float, silence: float | None, stop: Callable[[], bool] | None = None,
-           on_open: Callable[[], None] | None = None, patience: float | None = None) -> np.ndarray:
+           on_open: Callable[[], subprocess.Popen | None] | None = None,
+           patience: float | None = None) -> np.ndarray:
     """Record mono 16 kHz audio until `silence` seconds of quiet after speech (never, when None),
     until `stop()` turns true, until `patience` seconds pass with no speech at all, or until
     `max_seconds`. `on_open` runs once the microphone is open, so a start cue never plays
-    before the first word can be heard."""
+    before the first word can be heard. When it returns the cue's process, what the microphone
+    hears while the cue plays is dropped: through built-in speakers the cue is loud enough to
+    count as speech, which would start the end-of-turn countdown before the user says a word."""
     import numpy as np
     import sounddevice as sd
 
@@ -63,8 +67,11 @@ def record(max_seconds: float, silence: float | None, stop: Callable[[], bool] |
     spoke = False
     block = int(RATE * FRAME)
     with sd.InputStream(samplerate=RATE, channels=1, dtype="float32", blocksize=block) as stream:
-        if on_open:
-            on_open()
+        playing = on_open() if on_open else None
+        deadline = time.monotonic() + CUE_SECONDS
+        while (playing is not None and playing.poll() is None and time.monotonic() < deadline
+               and not (stop and stop())):
+            stream.read(block)
         while len(frames) * FRAME < max_seconds and not (stop and stop()):
             chunk, _ = stream.read(block)
             frames.append(chunk[:, 0].copy())
@@ -154,10 +161,12 @@ def paste() -> bool:
     return result.returncode == 0
 
 
-def cue(kind: str) -> None:
-    """Play a short system sound without waiting for it."""
-    with contextlib.suppress(OSError):
-        subprocess.Popen([AFPLAY, SOUNDS[kind]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def cue(kind: str) -> subprocess.Popen | None:
+    """Play a short system sound without waiting for it; returns its process, None if it could not start."""
+    try:
+        return subprocess.Popen([AFPLAY, SOUNDS[kind]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        return None
 
 
 def notify(title: str, message: str) -> None:
@@ -300,11 +309,12 @@ def run_until_stopped(max_seconds: float, clipboard: bool, force: bool, paste_to
     if lock_fd is not None:
         state.write_pid(lock_fd, os.getpid())  # only now, when a press can stop it rather than kill it
 
-    def opened() -> None:
-        cue("start")
+    def opened() -> subprocess.Popen | None:
+        playing = cue("start")
         notify("voice: listening", "Press your shortcut again to stop.")
         if not preload:
             threading.Thread(target=warm_imports, daemon=True).start()
+        return playing
 
     try:
         loading = models.loading(models.load_stt, models.stt_model(), force) if preload else contextlib.nullcontext()

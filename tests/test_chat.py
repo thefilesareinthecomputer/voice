@@ -258,6 +258,20 @@ class TestHookRelay(TempState):
         notify.assert_called_once()
 
 
+class TestDevices(TempState):
+    def test_the_microphone_opens_only_after_the_on_sound_ends(self) -> None:
+        order: list[str] = []
+        heard = threading.Event()
+        fx = chat.Devices(lambda event: heard.set(), force=False)
+        fx.sound = mock.Mock(wait=lambda timeout: order.append("sound ended"))
+        with mock.patch.object(chat, "quiet"), mock.patch.object(chat.listen, "cue"), \
+                mock.patch.object(chat.listen, "record",
+                                  side_effect=lambda *a, **k: order.append("record") or np.zeros(10, "float32")):
+            fx.listen(1)
+            self.assertTrue(heard.wait(5))
+        self.assertEqual(order, ["sound ended", "record"])
+
+
 class TestRun(TempState):
     def test_a_first_run_makes_the_state_folder_before_it_opens_the_log(self) -> None:
         class Reached(Exception):
@@ -327,6 +341,17 @@ class TestRecordPatience(TempState):
         with mock.patch.dict(sys.modules, {"sounddevice": sd}):
             audio = listen.record(60, 1.5, patience=1.0)
         self.assertLessEqual(len(audio), int(listen.RATE * 1.05))
+
+    def test_what_the_microphone_hears_while_the_start_sound_plays_is_dropped(self) -> None:
+        sound = iter([np.ones((1600, 1), "float32")] * 3)  # loud enough to count as speech
+        stream = mock.MagicMock()
+        stream.__enter__.return_value.read.side_effect = lambda n: (next(sound, np.zeros((n, 1), "float32")), False)
+        sd = mock.Mock(InputStream=mock.Mock(return_value=stream))
+        playing = mock.Mock(poll=mock.Mock(side_effect=[None, None, None, 0]))
+        with mock.patch.dict(sys.modules, {"sounddevice": sd}):
+            audio = listen.record(60, 1.5, on_open=lambda: playing, patience=1.0)
+        self.assertEqual(listen.peak(audio), 0.0)
+        self.assertLessEqual(len(audio), int(listen.RATE * 1.05))  # the patience ended it, not a pause
 
     def test_record_stops_when_told(self) -> None:
         stream = mock.MagicMock()

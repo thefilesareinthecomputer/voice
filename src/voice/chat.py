@@ -59,6 +59,7 @@ REPORTS = re.compile(rb"\x1b\[[IO]|\x1b\[\?[\d;]*[uc]|\x1b\[\d+;\d+R|\x1b\[\d+n"
                      rb"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\")
 OFF_PHRASES = {"voice chat off", "stop listening"}
 SOUNDS = {"on": "/System/Library/Sounds/Glass.aiff", "off": "/System/Library/Sounds/Bottle.aiff"}
+SOUND_SECONDS = 1.7    # the on sound lasts 1.65 s; afplay itself stays up about a second longer
 
 INSTRUCTION = (
     "The user is talking with you by voice through `voice chat`: they hear a spoken summary "
@@ -206,6 +207,7 @@ class Devices:
         self.pool: ThreadPoolExecutor | None = None
         self.model: Future | None = None
         self.stopped = threading.Event()
+        self.sound: subprocess.Popen | None = None  # the last on or off sound
 
     def load(self) -> bool:
         if self.model is not None:
@@ -242,12 +244,15 @@ class Devices:
 
     def listen(self, generation: int) -> None:
         self.stopped = stopped = threading.Event()
-        model = self.model
+        model, sound = self.model, self.sound
 
         def work() -> None:
             text = ""
             try:
                 quiet(stopped)  # never record the speaker
+                if sound is not None:  # nor the on sound, which would count as speech
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        sound.wait(timeout=SOUND_SECONDS)
                 if stopped.is_set():
                     return
                 audio = listen.record(MAX_TURN, self.silence, stop=stopped.is_set, on_open=lambda: listen.cue("start"),
@@ -272,7 +277,8 @@ class Devices:
 
     def cue(self, kind: str) -> None:
         with contextlib.suppress(OSError):
-            subprocess.Popen([listen.AFPLAY, SOUNDS[kind]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.sound = subprocess.Popen([listen.AFPLAY, SOUNDS[kind]],
+                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def notify(self, title: str, message: str) -> None:
         listen.notify(title, message)

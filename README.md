@@ -145,7 +145,7 @@ Any option `voice` doesn't know goes to `claude`, such as `--model` or `--resume
 - **Typing always takes over.** Any key you press while it talks or listens stops that, and the key still goes to Claude.
 - **Control+Q turns the loop off and on.** So does saying "voice chat off" on its own. After 30 seconds with nothing said, it turns off by itself, with a sound and a notification.
 - **Sounds mark each step.** A tick means the microphone is open. A pop means it closed and your words are on their way.
-- **The microphone never hears the speaker.** It opens only after the speaking ends.
+- **The microphone never hears `voice` itself.** It opens only after the speaking and the on sound end, and it ignores what it hears while its tick plays, so its own sounds never count as you talking.
 - **A global shortcut works from any app.** This is a second shortcut, separate from dictation's. Bind `~/.local/bin/voice chat --toggle` to a key such as Control+Option+Command+C, the same way as [the dictation shortcut](#from-a-keyboard-shortcut). It turns the loop of the newest running session off or on. A terminal never passes Command shortcuts to the program inside it, so this is the only way to use one.
 
 Claude Code needs no setup for this. `voice chat` adds its hooks and its summary instruction to this one session through command-line flags, and nothing in `~/.claude` changes. Your terminal app needs microphone access, which macOS asks for the first time.

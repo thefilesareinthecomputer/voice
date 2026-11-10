@@ -20,6 +20,7 @@ All notable changes to this project are listed here. The format follows [Keep a 
 ### Changed
 
 - The start sound and notification come once the microphone is open, and notifications no longer hold up the recording, so the first words are no longer lost.
+- The microphone ignores what it hears while the start sound plays. Through built-in speakers that sound counted as speech, so a pause ended the turn before you said a word.
 - MLX and the Parakeet code import while you talk, which shortens the wait after the stop press.
 - Takes transcribe one at a time, so a quick second take never loads a second model or overwrites a newer clipboard.
 - A start that is refused (critical memory pressure, a missing model) says so with the error sound and a notification.
