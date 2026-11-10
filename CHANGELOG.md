@@ -21,6 +21,9 @@ All notable changes to this project are listed here. The format follows [Keep a 
 
 - The start sound and notification come once the microphone is open, and notifications no longer hold up the recording, so the first words are no longer lost.
 - The microphone ignores what it hears while the start sound plays. Through built-in speakers that sound counted as speech, so a pause ended the turn before you said a word.
+- In `voice chat`, a pause after a sound with no words (a click, a cough, room noise) keeps listening instead of ending the turn; mouse movement and clicks no longer stop the speech or the listening; and turning a loop on switches any other running voice chat to plain typing.
+- The background speaker and the microphone recover when the audio device changes or the Mac wakes from sleep, instead of failing every time until restarted.
+- `voice chat` no longer goes quiet after Escape or Control+C stops Claude, after a command such as `/clear`, or after a turn Claude starts by itself; a microphone or model failure says so instead of reading as silence; a speaker that died is started again; and stopping speech never freezes the terminal.
 - MLX and the Parakeet code import while you talk, which shortens the wait after the stop press.
 - Takes transcribe one at a time, so a quick second take never loads a second model or overwrites a newer clipboard.
 - A start that is refused (critical memory pressure, a missing model) says so with the error sound and a notification.

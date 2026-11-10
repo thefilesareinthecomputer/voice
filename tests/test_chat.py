@@ -51,7 +51,7 @@ class TestSession(TempState):
     def test_it_starts_on_and_listening(self) -> None:
         fx = FakeEffects()
         chat.Session(fx).start()
-        self.assertEqual(fx.names(), ["load", "listen"])
+        self.assertEqual(fx.names(), ["load", "claim", "listen"])  # claim: other loops turn off
 
     def test_a_reply_is_spoken_then_the_microphone_opens(self) -> None:
         self.session.handle(("prompt",))
@@ -105,6 +105,18 @@ class TestSession(TempState):
         self.session.keys(b"\x1b[I" + b"x")
         self.assertIn("stop_listening", self.fx.names())
 
+    def test_the_mouse_and_other_reports_are_not_typing(self) -> None:
+        # Claude Code turns on mouse reporting, so moving the pointer over the window sends input.
+        reports = (b"\x1b[<35;10;5M", b"\x1b[<0;10;5M\x1b[<0;10;5m", b"\x1b[<64;3;4M",  # move, click, scroll
+                   b"\x1b[M #!", b"\x1b[32;10;5M",                    # older mouse encodings
+                   b"\x1b[>0;95;0c", b"\x1b[?2026;2$y", b"\x1b[?997;1n",  # attributes, mode, color scheme
+                   b"\x1b[8;40;120t", b"\x1b_Gi=1;OK\x1b\\")          # window size, graphics
+        for report in reports:
+            self.assertEqual(self.session.keys(report), report)
+        self.assertNotIn("stop_listening", self.fx.names())
+        self.session.keys(b"\x1b[<35;11;5Mq")  # a key that arrives with a pointer move still counts
+        self.assertIn("stop_listening", self.fx.names())
+
     def test_a_key_while_speaking_stops_the_speech_and_still_reaches_claude(self) -> None:
         self.session.handle(("prompt",))
         self.session.handle(("reply", "<speak>Long summary.</speak>"))
@@ -138,19 +150,63 @@ class TestSession(TempState):
         self.session.handle(("prompt",))
         self.fx.calls.clear()
         self.session.keys(b"\x11")
-        self.assertEqual(self.fx.names(), ["load", "cue", "listen"])
+        self.assertEqual(self.fx.names(), ["load", "claim", "cue", "listen"])
 
     def test_a_reply_that_lands_while_the_user_talks_leaves_the_microphone_alone(self) -> None:
         self.session.handle(("reply", "<speak>Hi.</speak>"))  # from start(), listening already
         self.assertNotIn("say", self.fx.names())
         self.assertNotIn("stop_listening", self.fx.names())
 
-    def test_a_reply_with_no_prompt_before_it_is_ignored(self) -> None:
-        # A lone forged Stop on the event socket does nothing.
+    def test_a_reply_to_a_turn_claude_started_itself_is_spoken(self) -> None:
+        # A background task finishing starts a turn with no prompt event before its reply.
         gen = self.listening_generation_after_reply()
         self.session.handle(("heard", gen, "run the tests"))
         self.fx.calls.clear()
-        self.session.handle(("reply", "<speak>Forged.</speak>"))
+        self.session.handle(("reply", "<speak>The task finished.</speak>"))
+        self.assertEqual(self.fx.calls[-1][:2], ("say", "The task finished."))
+
+    def test_escape_mid_turn_reopens_the_microphone(self) -> None:
+        # Claude Code sends no Stop for an interrupted turn.
+        for key in (b"\x1b", b"\x03", b"\x1b[27u"):
+            session = chat.Session(fx := FakeEffects())
+            session.start()
+            session.handle(("prompt",))
+            fx.calls.clear()
+            self.assertEqual(session.keys(key), key)  # Claude still gets the key
+            self.assertFalse(session.busy)
+            later = [c for c in fx.calls if c[0] == "later"]
+            self.assertEqual(len(later), 1, key)
+            session.handle(later[0][2])
+            self.assertEqual(fx.names()[-1], "listen", key)
+
+    def test_enter_on_a_line_that_starts_no_turn_reopens_the_microphone(self) -> None:
+        self.session.keys(b"/")  # typing takes over from the listening
+        self.session.keys(b"clear\r")
+        resume = [c for c in self.fx.calls if c[0] == "later"][-1][2]
+        self.session.handle(resume)  # /clear sends no prompt event
+        self.assertEqual(self.fx.names()[-1], "listen")
+
+    def test_enter_on_a_real_prompt_leaves_the_microphone_to_the_reply(self) -> None:
+        self.session.keys(b"run the tests\r")
+        resume = [c for c in self.fx.calls if c[0] == "later"][-1][2]
+        self.session.handle(("prompt",))  # the prompt's hook arrives first
+        self.fx.calls.clear()
+        self.session.handle(resume)
+        self.assertEqual(self.fx.calls, [])
+
+    def test_a_microphone_or_model_failure_says_so(self) -> None:
+        self.session.handle(("heard", self.session.generation, None))  # listening since start()
+        self.assertFalse(self.session.on)
+        notify = [c for c in self.fx.calls if c[0] == "notify"][-1]
+        self.assertIn("failed", notify[2])
+
+    def test_another_session_coming_on_turns_this_loop_off_and_says_so(self) -> None:
+        self.session.handle(("off",))
+        self.assertFalse(self.session.on)
+        self.assertIn("stop_listening", self.fx.names())
+        self.assertEqual(self.fx.calls[-1][0], "notify")
+        self.fx.calls.clear()
+        self.session.handle(("off",))  # already off: nothing more happens
         self.assertEqual(self.fx.calls, [])
 
     def test_turning_on_under_memory_pressure_stays_off(self) -> None:
@@ -251,6 +307,21 @@ class TestHookRelay(TempState):
         self.assertEqual(new, [("toggle",)])
         self.assertEqual(old, [])
 
+    def test_coming_on_turns_every_other_running_loop_off(self) -> None:
+        own: list[tuple] = []
+        other: list[tuple] = []
+        mine = chat.listen_for_events(chat.state.STATE / "chat-1.sock", own.append)
+        self.addCleanup(mine.close)
+        theirs = chat.listen_for_events(chat.state.STATE / "chat-2.sock", other.append)
+        self.addCleanup(theirs.close)
+        (chat.state.STATE / "chat-3.sock").touch()  # left behind by a session that crashed
+        chat.release_others(mine.path)
+        deadline = time.monotonic() + 5
+        while not other and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(other, [("off",)])
+        self.assertEqual(own, [])
+
     def test_toggle_with_no_session_says_so(self) -> None:
         with mock.patch.object(chat.listen, "cue") as cue, mock.patch.object(chat.listen, "notify") as notify:
             self.assertEqual(chat.toggle_running(), 1)
@@ -270,6 +341,78 @@ class TestDevices(TempState):
             fx.listen(1)
             self.assertTrue(heard.wait(5))
         self.assertEqual(order, ["sound ended", "record"])
+
+
+    def test_a_speaker_that_died_is_started_again_and_released_at_the_end(self) -> None:
+        spoken = threading.Event()
+        fx = chat.Devices(lambda event: spoken.set(), force=False)
+        with mock.patch.object(chat.serve, "start", return_value=True) as start, \
+                mock.patch.object(chat.speak, "run") as run:
+            fx.say("Hello.", 1)
+            self.assertTrue(spoken.wait(5))
+        start.assert_called_once()
+        run.assert_called_once_with("Hello.")
+        self.assertTrue(fx.started_speaker)
+
+    def test_a_summary_waits_for_a_stop_still_on_its_way(self) -> None:
+        order: list[str] = []
+        spoken = threading.Event()
+        fx = chat.Devices(lambda event: spoken.set(), force=False)
+        release = threading.Event()
+
+        def run(text, stop=False, **kwargs):
+            if stop:
+                release.wait(5)  # a speaker slow to answer the stop
+            order.append("stop" if stop else "say")
+        with mock.patch.object(chat.serve, "start", return_value=False), \
+                mock.patch.object(chat.speak, "run", side_effect=run):
+            fx.stop_speech()
+            fx.say("Hello.", 1)
+            release.set()
+            self.assertTrue(spoken.wait(5))
+        self.assertEqual(order, ["stop", "say"])
+
+    def test_a_closing_session_never_starts_the_speaker(self) -> None:
+        spoken = threading.Event()
+        fx = chat.Devices(lambda event: spoken.set(), force=False)
+        fx.closing = True
+        with mock.patch.object(chat.serve, "start") as start, mock.patch.object(chat.speak, "run"):
+            fx.say("Hello.", 1)
+            self.assertTrue(spoken.wait(5))
+        start.assert_not_called()
+
+    def listen_with(self, transcripts: list[str]) -> tuple[list[tuple], list[dict]]:
+        """Run one listen where each recording holds sound and transcribes to the next transcript."""
+        posted: list[tuple] = []
+        done = threading.Event()
+        calls: list[dict] = []
+        fx = chat.Devices(lambda event: (posted.append(event), done.set()), force=False)
+        fx.model = mock.Mock(result=mock.Mock(return_value="model"))
+        texts = iter(transcripts)
+
+        def record(*args, **kwargs):
+            calls.append(kwargs)
+            return np.ones(10, "float32")
+        with mock.patch.object(chat, "quiet"), mock.patch.object(chat.listen, "cue"), \
+                mock.patch.object(chat.listen, "record", side_effect=record), \
+                mock.patch.object(chat.listen, "transcribe_with", side_effect=lambda model, audio: next(texts)):
+            fx.listen(1)
+            self.assertTrue(done.wait(5))
+        return posted, calls
+
+    def test_a_pause_after_a_sound_with_no_words_keeps_listening(self) -> None:
+        posted, calls = self.listen_with(["", "  ", "run the tests"])  # a click, a cough, then words
+        self.assertEqual(posted, [("heard", 1, "run the tests")])
+        self.assertEqual(len(calls), 3)
+        self.assertIsNotNone(calls[0]["on_open"])
+        self.assertIsNone(calls[1]["on_open"])  # no second start sound: the microphone stayed open
+        self.assertLess(calls[1]["patience"], calls[0]["patience"] + 0.001)
+
+    def test_no_words_before_the_patience_runs_out_ends_the_turn(self) -> None:
+        with mock.patch.object(chat, "PATIENCE", 0.0):
+            posted, calls = self.listen_with([""])
+        self.assertEqual(posted, [("heard", 1, "")])
+        self.assertEqual(len(calls), 1)
 
 
 class TestRun(TempState):
@@ -352,6 +495,25 @@ class TestRecordPatience(TempState):
             audio = listen.record(60, 1.5, on_open=lambda: playing, patience=1.0)
         self.assertEqual(listen.peak(audio), 0.0)
         self.assertLessEqual(len(audio), int(listen.RATE * 1.05))  # the patience ended it, not a pause
+
+    def test_a_changed_input_device_restarts_portaudio_and_records(self) -> None:
+        class PortAudioError(Exception):
+            pass
+
+        stream = mock.MagicMock()
+        stream.__enter__.return_value.read.side_effect = lambda n: (np.zeros((n, 1), "float32"), False)
+        opens = iter([PortAudioError("Error starting stream"), stream])  # stale device list, then fresh
+
+        def input_stream(**options):
+            opened = next(opens)
+            if isinstance(opened, Exception):
+                raise opened
+            return opened
+        sd = mock.Mock(InputStream=input_stream, PortAudioError=PortAudioError)
+        with mock.patch.dict(sys.modules, {"sounddevice": sd}):
+            audio = listen.record(60, 1.5, patience=0.3)
+        sd._initialize.assert_called_once()
+        self.assertGreater(len(audio), 0)
 
     def test_record_stops_when_told(self) -> None:
         stream = mock.MagicMock()

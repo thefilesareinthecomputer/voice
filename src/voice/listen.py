@@ -66,7 +66,17 @@ def record(max_seconds: float, silence: float | None, stop: Callable[[], bool] |
     levels: list[float] = []
     spoke = False
     block = int(RATE * FRAME)
-    with sd.InputStream(samplerate=RATE, channels=1, dtype="float32", blocksize=block) as stream:
+    options = {"samplerate": RATE, "channels": 1, "dtype": "float32", "blocksize": block}
+    with contextlib.ExitStack() as stack:
+        try:
+            stream = stack.enter_context(sd.InputStream(**options))
+        except sd.PortAudioError:
+            # PortAudio keeps the device list it found at startup, so in a long-running process
+            # (voice chat) the microphone fails once the input changes or the Mac wakes from sleep.
+            # Start it again and retry once.
+            sd._terminate()
+            sd._initialize()
+            stream = stack.enter_context(sd.InputStream(**options))
         playing = on_open() if on_open else None
         deadline = time.monotonic() + CUE_SECONDS
         while (playing is not None and playing.poll() is None and time.monotonic() < deadline

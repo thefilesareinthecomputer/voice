@@ -52,11 +52,24 @@ PATIENCE = 30.0        # seconds with no speech before the loop turns itself off
 MAX_TURN = 600.0       # the longest single turn, in seconds
 SUBMIT_DELAY = 0.15    # between the pasted text and Enter, so Claude Code reads Enter as a submit
 TOGGLE_KEYS = (b"\x11", b"\x1b[113;5u")  # Control+Q, plain and in the kitty keyboard protocol
-# What the terminal sends on its own rather than for a key: focus changes, and answers to
-# Claude Code's queries (keyboard protocol, device attributes, cursor position, status,
-# colors, version). These pass through without counting as typing.
-REPORTS = re.compile(rb"\x1b\[[IO]|\x1b\[\?[\d;]*[uc]|\x1b\[\d+;\d+R|\x1b\[\d+n"
-                     rb"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\")
+INTERRUPT_KEYS = (b"\x1b", b"\x1b[27u", b"\x03", b"\x1b[99;5u")  # Escape, Control+C, the same two ways
+ENTER_KEYS = (b"\r", b"\x1b[13u")
+RESUME_SECONDS = 2.0   # after a key that ends a turn with no event, before the microphone reopens;
+                       # long enough for a real prompt's hook to arrive first and cancel it
+# What the terminal sends on its own rather than for a key: focus changes, the mouse (Claude
+# Code turns on reporting, so even moving the pointer over the window sends these), and answers
+# to Claude Code's queries (keyboard protocol, device attributes, cursor position, status, color
+# scheme, modes, window size, colors, version, graphics). These pass through without counting
+# as typing.
+REPORTS = re.compile(rb"\x1b\[[IO]"                       # focus in, out
+                     rb"|\x1b\[<\d+;\d+;\d+[Mm]"          # mouse, SGR encoding
+                     rb"|\x1b\[M[\x20-\xff]{3}"           # mouse, legacy encoding
+                     rb"|\x1b\[\d+;\d+;\d+[Mt]"           # mouse in urxvt encoding; window size
+                     rb"|\x1b\[[?>=][\d;]*[uc]"           # keyboard protocol; device attributes
+                     rb"|\x1b\[\??[\d;]+[Rn]"             # cursor position; status, color scheme
+                     rb"|\x1b\[\??[\d;]+\$y"              # mode
+                     rb"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # colors and other OSC answers
+                     rb"|\x1b[P_][^\x1b]*\x1b\\")         # version (DCS); graphics (APC)
 OFF_PHRASES = {"voice chat off", "stop listening"}
 SOUNDS = {"on": "/System/Library/Sounds/Glass.aiff", "off": "/System/Library/Sounds/Bottle.aiff"}
 SOUND_SECONDS = 1.7    # the on sound lasts 1.65 s; afplay itself stays up about a second longer
@@ -104,20 +117,24 @@ class Session:
     def start(self) -> None:
         if self.fx.load():
             self.on = True
+            self.fx.claim()
             self._listen()
 
     def handle(self, event: tuple) -> None:
         kind = event[0]
         if kind == "toggle":
             self.toggle()
+        elif kind == "off":  # another session's loop came on: one microphone loop at a time
+            if self.on:
+                self._turn_off()
+                self.fx.notify("voice chat: moved", "Another voice chat is listening now. "
+                               "This one is plain typing; press Control+Q here to take it back.")
         elif kind == "prompt":
             self.busy = True
             self._cancel()
         elif kind == "reply":
-            # Claude Code reports a reply only after a prompt, so a reply while idle is forged:
-            # the event socket is open to any process running as this user.
-            if not self.busy:
-                return
+            # No prompt event needs to come first: Claude starts some turns itself (a background
+            # task or another agent finishing), and their replies are spoken too.
             self.busy = False
             if self.on and self.phase != "listening":  # never talk over the user
                 self._reply(event[1])
@@ -133,16 +150,28 @@ class Session:
         elif kind == "heard" and event[1] == self.generation and self.phase == "listening":
             self.phase = "idle"
             self._heard(event[2])
+        elif kind == "resume" and event[1] == self.generation and self.on and not self.busy and self.phase == "idle":
+            self._listen()
 
     def keys(self, data: bytes) -> bytes:
         """Keyboard input: returns what goes on to Claude. Control+Q toggles the loop and is kept
-        back; any other key stops the speech or listening in progress and goes through."""
+        back; any other key stops the speech or listening in progress and goes through.
+
+        Two key presses end a turn that Claude Code reports nothing for, so the microphone
+        reopens on its own shortly after: Escape or Control+C interrupting Claude (no Stop event
+        follows), and Enter on a line that starts no turn, such as /clear (no prompt event)."""
         toggles = 0
         for key in TOGGLE_KEYS:
             toggles += data.count(key)
             data = data.replace(key, b"")
-        if self.phase != "idle" and REPORTS.sub(b"", data):
+        typed = REPORTS.sub(b"", data)
+        if self.phase != "idle" and typed:
             self._cancel()
+        if self.on and self.busy and typed in INTERRUPT_KEYS:
+            self.busy = False
+            self.fx.later(RESUME_SECONDS, ("resume", self.generation))
+        elif self.on and not self.busy and typed.endswith(ENTER_KEYS):
+            self.fx.later(RESUME_SECONDS, ("resume", self.generation))
         for _ in range(toggles):
             self.toggle()
         return data
@@ -152,6 +181,7 @@ class Session:
             self._turn_off()
         elif self.fx.load():
             self.on = True
+            self.fx.claim()
             self.fx.cue("on")
             self._listen()
 
@@ -172,8 +202,12 @@ class Session:
         self.phase = "listening"
         self.fx.listen(self.generation)
 
-    def _heard(self, text: str) -> None:
-        if not text.strip():
+    def _heard(self, text: str | None) -> None:
+        if text is None:  # the microphone or the model failed; the error sound has played
+            self._turn_off()
+            self.fx.notify("voice chat: off", "The microphone or the speech model failed; the error is in "
+                           "~/.local/state/claude-voice/chat.log. Press Control+Q to try again.")
+        elif not text.strip():
             self._turn_off(paused=True)
         elif off_phrase(text):
             self._turn_off()
@@ -208,6 +242,10 @@ class Devices:
         self.model: Future | None = None
         self.stopped = threading.Event()
         self.sound: subprocess.Popen | None = None  # the last on or off sound
+        self.own: Path | None = None  # this session's event socket
+        self.started_speaker = False  # restarted the speaker mid-session, so release it at the end
+        self.closing = False
+        self.stopping: threading.Thread | None = None  # the last stop sent to the speaker
 
     def load(self) -> bool:
         if self.model is not None:
@@ -230,24 +268,44 @@ class Devices:
             threading.Thread(target=lambda: (pool.shutdown(wait=True), models.release()), daemon=True).start()
 
     def say(self, line: str, generation: int) -> None:
+        stopping = self.stopping
+
         def work() -> None:
             try:
+                if stopping is not None:  # a stop still on its way must not cut this summary off
+                    stopping.join(timeout=5)
+                # A speaker that died mid-session comes back, rather than every reply loading
+                # the voice model in this process; never once the session is closing.
+                if not self.closing and serve.start(self.force):
+                    self.started_speaker = True
                 speak.run(line)
             except (Exception, SystemExit) as exc:
                 log(exc)
             self.post(("spoken", generation))
         threading.Thread(target=work, daemon=True).start()
 
+    def later(self, seconds: float, event: tuple) -> None:
+        timer = threading.Timer(seconds, self.post, args=(event,))
+        timer.daemon = True
+        timer.start()
+
+    def claim(self) -> None:
+        threading.Thread(target=release_others, args=(self.own,), daemon=True).start()
+
     def stop_speech(self) -> None:
-        with contextlib.suppress(Exception):
-            speak.run(None, stop=True)
+        # Off the main thread: a speaker that is slow to answer must not freeze the terminal.
+        def work() -> None:
+            with contextlib.suppress(Exception, SystemExit):
+                speak.run(None, stop=True)
+        self.stopping = threading.Thread(target=work, daemon=True)
+        self.stopping.start()
 
     def listen(self, generation: int) -> None:
         self.stopped = stopped = threading.Event()
         model, sound = self.model, self.sound
 
         def work() -> None:
-            text = ""
+            text: str | None = ""
             try:
                 quiet(stopped)  # never record the speaker
                 if sound is not None:  # nor the on sound, which would count as speech
@@ -255,16 +313,26 @@ class Devices:
                         sound.wait(timeout=SOUND_SECONDS)
                 if stopped.is_set():
                     return
-                audio = listen.record(MAX_TURN, self.silence, stop=stopped.is_set, on_open=lambda: listen.cue("start"),
-                                      patience=PATIENCE)
-                if stopped.is_set():
-                    return
-                listen.cue("stop")
-                if listen.peak(audio) > listen.SPEECH_LEVEL and model is not None:
-                    text = listen.transcribe_with(model.result(), audio)
+                # A click, a cough or room noise followed by a pause ends a recording with no words
+                # in it. That is not the user's turn: listen on, quietly, until PATIENCE runs out.
+                started = time.monotonic()
+                on_open: Callable[[], Any] | None = lambda: listen.cue("start")  # noqa: E731
+                while True:
+                    left = max(0.0, PATIENCE - (time.monotonic() - started))
+                    audio = listen.record(MAX_TURN, self.silence, stop=stopped.is_set, on_open=on_open, patience=left)
+                    if stopped.is_set():
+                        return
+                    if listen.peak(audio) > listen.SPEECH_LEVEL and model is not None:
+                        text = listen.transcribe_with(model.result(), audio)
+                    if text.strip() or model is None or time.monotonic() - started >= PATIENCE:
+                        break
+                    on_open = None
+                if text.strip():
+                    listen.cue("stop")
             except Exception as exc:
                 listen.cue("error")
                 log(exc)
+                text = None  # not silence: the session says what failed
             self.post(("heard", generation, text))
         threading.Thread(target=work, daemon=True).start()
 
@@ -390,6 +458,8 @@ def event(payload: Any) -> tuple | None:
     name = payload.get("hook_event_name")
     if name == "Toggle":  # from `voice chat --toggle`, not from Claude Code
         return ("toggle",)
+    if name == "Off":  # from another session whose loop came on
+        return ("off",)
     if name == "UserPromptSubmit":
         return ("prompt",)
     text = payload.get("last_assistant_message" if name == "Stop" else "message")
@@ -432,6 +502,18 @@ def toggle_running() -> int:
     listen.cue("error")
     listen.notify("voice chat: not running", "Start voice chat in a terminal first.")
     return 1
+
+
+def release_others(own: Path | None) -> None:
+    """Tell every other running session to turn its loop off: two loops would both hear the user
+    and both type what was said. A socket nothing answers, left by a crash, is skipped."""
+    for path in state.STATE.glob("chat-*.sock"):
+        if path == own:
+            continue
+        with contextlib.suppress(OSError), socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(2)
+            sock.connect(str(path))
+            sock.sendall(b'{"hook_event_name": "Off"}\n')
 
 
 class EventServer:
@@ -518,6 +600,7 @@ def run(claude_args: list[str], force: bool = False, silence: float = SILENCE) -
     saved_err = os.dup(2)
     started_speaker = serve.start(force)
     fx = Devices(post, force, silence)
+    fx.own = path
     server: EventServer | None = None
     # Fork before any thread starts. Claude Code runs the hooks only once a prompt arrives,
     # well after the event server below is listening.
@@ -550,6 +633,7 @@ def run(claude_args: list[str], force: bool = False, silence: float = SILENCE) -
                     session.handle(events.get())
         return terminal.wait()
     finally:
+        fx.closing = True
         termios.tcsetattr(stdin, termios.TCSAFLUSH, saved)
         signal.signal(signal.SIGWINCH, signal.SIG_DFL)
         fx.stop_listening()
@@ -557,7 +641,7 @@ def run(claude_args: list[str], force: bool = False, silence: float = SILENCE) -
         if server is not None:
             server.close()
         terminal.close()
-        if started_speaker:
+        if started_speaker or fx.started_speaker:
             speak.run(None, release=True)
         os.dup2(saved_err, 2)
         os.close(saved_err)

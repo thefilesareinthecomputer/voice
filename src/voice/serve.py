@@ -76,7 +76,14 @@ class Speaker:
 
     def _play(self, conn: Any, text: str, voice_path: str, speed: float, lang: str, cancel: threading.Event) -> None:
         try:
-            speak.render(self.model, text, voice_path, speed, lang, self.audio, cancel, self.guard)
+            try:
+                speak.render(self.model, text, voice_path, speed, lang, self.audio, cancel, self.guard)
+            except self.audio.PortAudioError:
+                # PortAudio keeps the device list it found at startup, so once the output changes
+                # (headphones in or out) every stream fails. Start it again and retry once.
+                self.audio._terminate()
+                self.audio._initialize()
+                speak.render(self.model, text, voice_path, speed, lang, self.audio, cancel, self.guard)
         except Exception as exc:  # the log gets the type and stack, never the text
             traceback.print_tb(exc.__traceback__)
             print(type(exc).__name__, file=sys.stderr)

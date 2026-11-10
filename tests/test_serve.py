@@ -17,15 +17,29 @@ from voice import models, serve, speak, state
 class FakeAudio:
     """Stands in for sounddevice: play starts a chunk, wait blocks until stop or finish."""
 
+    class PortAudioError(Exception):
+        pass
+
     def __init__(self) -> None:
         self.played: list[str] = []
         self.stops = 0
         self.idle = threading.Event()
         self.idle.set()
+        self.lost_device = False  # every play fails until PortAudio starts again
+        self.restarts = 0
 
     def play(self, data, rate) -> None:
+        if self.lost_device:
+            raise self.PortAudioError("Error starting stream")
         self.played.append(data)
         self.idle.clear()
+
+    def _terminate(self) -> None:
+        pass
+
+    def _initialize(self) -> None:
+        self.restarts += 1
+        self.lost_device = False
 
     def wait(self) -> None:
         self.idle.wait(5)
@@ -76,6 +90,20 @@ class TestSpeaker(TempState):
         self.assertTrue(second.closed.wait(5))
         self.assertEqual(audio.played, ["a1", "b1"])
         self.assertGreaterEqual(audio.stops, 1)
+
+    def test_a_lost_output_device_restarts_portaudio_and_plays(self) -> None:
+        audio = FakeAudio()
+        audio.lost_device = True  # the output changed after the server started
+        speaker = serve.Speaker(fake_model(["a1"], ["a1"]), audio)
+        reply = Reply()
+        speaker.say(reply, "hello", "voice.safetensors", 1.0, "a")
+        deadline = time.monotonic() + 5
+        while not audio.played and time.monotonic() < deadline:
+            time.sleep(0.01)
+        audio.finish()
+        self.assertTrue(reply.closed.wait(5))
+        self.assertEqual(audio.restarts, 1)
+        self.assertEqual(audio.played, ["a1"])
 
     def test_stop_with_nothing_playing_does_nothing(self) -> None:
         audio = FakeAudio()
