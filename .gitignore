@@ -30,3 +30,6 @@ models/
 .DS_Store
 .idea/
 .vscode/
+
+# Working notes stay local
+tasks/

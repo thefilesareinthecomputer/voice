@@ -72,7 +72,7 @@ INSTRUCTION = (
 # The last <speak> line, and only when nothing but whitespace follows it.
 SPEAK = re.compile(r"<speak>((?:(?!<speak>).)*?)</speak>\s*\Z", re.DOTALL | re.IGNORECASE)
 MARKS = re.compile(r"[*`#>]+|(?<!\w)_+|_+(?!\w)")
-CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 MAX_SPOKEN = 400
 
 
@@ -507,6 +507,7 @@ def run(claude_args: list[str], force: bool = False, silence: float = SILENCE) -
         with contextlib.suppress(OSError):
             os.write(wake_w, b"w")
 
+    state.folder()  # a first run on a new machine has none yet
     log_fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     saved_err = os.dup(2)
     started_speaker = serve.start(force)

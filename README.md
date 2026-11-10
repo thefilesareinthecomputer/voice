@@ -156,11 +156,11 @@ This makes ordinary Claude Code sessions read a short summary of each reply alou
 
 While it's on, Claude ends every reply with a one-to-three sentence summary of what it did and what it needs from you, and only that summary is spoken. A reply without one stays silent, sending your next message stops the playback, and headless `claude -p` runs stay silent.
 
-The hook passes the summary to `voice speak` and returns at once. It reads its settings only from `~/.claude/voice.json`, and it runs on the `python3` that ships with macOS, with `-I` so nothing outside the standard library can load into it.
+The hook passes the summary to `voice speak` and returns at once. It reads its settings only from `~/.claude/voice.json`, and it needs only Python's standard library, so the `python3` that ships with macOS runs it. The `-I` flag keeps your environment variables and user packages from loading into it.
 
 1. Copy the hook into place:
    ```bash
-   mkdir -p ~/.claude/hooks && cp integrations/claude-code/voice_reply.py ~/.claude/hooks/
+   mkdir -p ~/.claude/hooks && cp -i integrations/claude-code/voice_reply.py ~/.claude/hooks/
    ```
 2. Add it to the `hooks` key of `~/.claude/settings.json`, beside any hooks you already have:
    ```json
@@ -177,7 +177,7 @@ The hook passes the summary to `voice speak` and returns at once. It reads its s
    ```
 4. Optionally, add the `/voice` command, which takes `on`, `off` and `status`. `on` says "Voice is on." aloud, so you know it works before the next reply:
    ```bash
-   mkdir -p ~/.claude/commands && cp integrations/claude-code/voice.md ~/.claude/commands/
+   mkdir -p ~/.claude/commands && cp -i integrations/claude-code/voice.md ~/.claude/commands/
    ```
 
 Each summary takes about 4 seconds to start unless the background speaker is running. Run `voice speak --warm` while voice is on, and each summary starts in about half a second. `voice speak --release` frees that memory again.
@@ -240,7 +240,7 @@ Before loading a model, `voice` checks macOS's memory-pressure level. At critica
 - **Universal Clipboard:** when Handoff is on, macOS can share the clipboard with your other nearby Apple devices. Turn off Handoff in **System Settings > General > AirDrop & Handoff** to keep the text on this Mac.
 - **Network:** after `voice setup`, `voice` makes no network requests. Every other command sets `HF_HUB_OFFLINE=1` before any model library is imported.
 - **Voice chat:** what you say is typed into Claude Code as your message, so it goes wherever your Claude Code messages go. The summary Claude speaks is played locally and never stored.
-- **Voice chat and other programs:** any program running as you can reach a session's socket and turn its loop on, the same as `voice chat --toggle`, and the start sound plays when it does. While the microphone is open, any sound it hears, including speech another program plays, is typed in as your message. A leading `/`, `!` or `#` is stripped first, so it arrives as plain text and can't run a slash command, a shell command or a memory write.
+- **Voice chat and other programs:** any program running as you can reach a session's socket and turn its loop on, the same as `voice chat --toggle`, and the start sound plays when it does. It can also send a made-up prompt and reply, so the loop speaks text of its choosing. While the microphone is open, any sound it hears, including speech another program plays, is typed in as your message. A leading `/`, `!` or `#` is stripped first, so it arrives as plain text and can't run a slash command, a shell command or a memory write.
 - **Files:** `voice` keeps its lock files, sockets and error logs in `~/.local/state/claude-voice/` (under `$XDG_STATE_HOME` when that is set), a folder only you can read. `voice shrink` writes its copies to `~/.local/share/voice/models/`, each in a folder only you can read. The log never holds a transcript. `voice` trusts a pid file only while its process is alive and holds a lock on that file, so it never signals a process that has exited.
 
 ## Contributing

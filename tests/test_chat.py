@@ -3,6 +3,7 @@ the terminal it owns. The microphone, speaker and Claude Code itself are faked."
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import os
@@ -145,7 +146,7 @@ class TestSession(TempState):
         self.assertNotIn("stop_listening", self.fx.names())
 
     def test_a_reply_with_no_prompt_before_it_is_ignored(self) -> None:
-        # Another process on the event socket must not be able to make the loop speak and listen.
+        # A lone forged Stop on the event socket does nothing.
         gen = self.listening_generation_after_reply()
         self.session.handle(("heard", gen, "run the tests"))
         self.fx.calls.clear()
@@ -255,6 +256,27 @@ class TestHookRelay(TempState):
             self.assertEqual(chat.toggle_running(), 1)
         cue.assert_called_once_with("error")
         notify.assert_called_once()
+
+
+class TestRun(TempState):
+    def test_a_first_run_makes_the_state_folder_before_it_opens_the_log(self) -> None:
+        class Reached(Exception):
+            pass
+
+        tty = mock.Mock(isatty=lambda: True, fileno=lambda: 0)
+        before = set(os.listdir("/dev/fd"))
+        with mock.patch("sys.stdin", tty), mock.patch("sys.stdout", tty), \
+                mock.patch.object(chat.shutil, "which", return_value="/usr/bin/true"), \
+                mock.patch.multiple(chat.models, check_pressure=mock.DEFAULT, require=mock.DEFAULT), \
+                mock.patch.object(chat.termios, "tcgetattr"), \
+                mock.patch.object(chat.os, "dup", side_effect=Reached):  # the step after the log opens
+            self.assertFalse(self.state.exists())
+            with self.assertRaises(Reached):
+                chat.run([])
+        for fd in set(os.listdir("/dev/fd")) - before:  # the pipe and the log, which run has not closed yet
+            with contextlib.suppress(OSError):
+                os.close(int(fd))
+        self.assertTrue((self.state / "chat.log").exists())
 
 
 class TestTerminal(TempState):
