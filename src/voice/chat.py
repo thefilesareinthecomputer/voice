@@ -10,9 +10,10 @@ an Accessibility or Automation grant.
     any other key     stop the speech or the listening in progress; the key goes to Claude
     "voice chat off"  said on its own, turns the loop off; so does 30 seconds of silence
 
-Claude Code learns about the loop from two flags on this one session: `--settings` adds
-hooks that report each prompt and reply over a private socket, and
-`--append-system-prompt` asks for the summary line. Nothing in ~/.claude changes.
+Claude Code learns about the loop through `--settings` on this one session, which adds hooks
+that report each prompt and reply over a private socket. While the loop is on, the prompt
+hook adds a note to each message asking for the summary line; while it is off, the hook adds
+nothing and Claude Code behaves as it always does. Nothing in ~/.claude changes.
 
 Parakeet stays loaded while the loop is on and is released when it is off. Speech goes
 through the resident speaker, started for the session if it was not running.
@@ -74,10 +75,11 @@ OFF_PHRASES = {"voice chat off", "stop listening"}
 SOUNDS = {"on": "/System/Library/Sounds/Glass.aiff", "off": "/System/Library/Sounds/Bottle.aiff"}
 SOUND_SECONDS = 1.7    # the on sound lasts 1.65 s; afplay itself stays up about a second longer
 
+# Added to each message while the loop is on, never while it is off.
 INSTRUCTION = (
-    "The user is talking with you by voice through `voice chat`: they hear a spoken summary "
-    "of each reply instead of reading it, and their messages are speech transcripts, so read "
-    "past small transcription errors. End every reply with one line <speak>...</speak>: one "
+    "Voice chat is on: the user hears a spoken summary of your reply instead of reading it, "
+    "and their message may be a speech transcript, so read past small transcription errors. "
+    "End this reply with one line <speak>...</speak>: one "
     "to three plain spoken sentences saying what you did or found and what you need from the "
     "user next. If you need a decision, ask for it there. No file paths, code, commands, URLs "
     "or symbols in it; say them in words or say they are on screen."
@@ -489,7 +491,9 @@ def event(payload: Any) -> tuple | None:
 
 
 def hook() -> int:
-    """`voice chat --hook`: forward one hook payload to the session. Never blocks or fails Claude Code."""
+    """`voice chat --hook`: forward one hook payload to the session. For a prompt, the session
+    answers whether the loop is on, and while it is, the voice note goes to Claude Code with the
+    message. Never blocks or fails Claude Code."""
     with contextlib.suppress(Exception):
         path = Path(os.environ.get("VOICE_CHAT_SOCKET", ""))
         if path.parent != state.STATE or not path.name.startswith("chat-"):
@@ -503,6 +507,9 @@ def hook() -> int:
             sock.settimeout(2)
             sock.connect(str(path))
             sock.sendall(message)
+            if payload.get("hook_event_name") == "UserPromptSubmit" and serve.read_line(sock) == b"on":
+                note = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": INSTRUCTION}}
+                print(json.dumps(note))
     return 0
 
 
@@ -534,10 +541,13 @@ def release_others(own: Path | None) -> None:
 
 
 class EventServer:
-    """Accepts hook connections on a thread and posts each event."""
+    """Accepts hook connections on a thread and posts each event. A prompt is answered with
+    whether the loop is on, from `loop_on`."""
 
-    def __init__(self, path: Path, post: Callable[[tuple], None]) -> None:
+    def __init__(self, path: Path, post: Callable[[tuple], None],
+                 loop_on: Callable[[], bool] = lambda: False) -> None:
         self.path = path
+        self.loop_on = loop_on
         state.folder()
         with contextlib.suppress(FileNotFoundError):
             path.unlink()
@@ -562,6 +572,8 @@ class EventServer:
                     found = event(json.loads(serve.read_line(conn)))
                     if found is not None:
                         post(found)
+                    if found == ("prompt",):
+                        conn.sendall(b"on\n" if self.loop_on() else b"off\n")
 
     def close(self) -> None:
         self.sock.close()
@@ -569,8 +581,9 @@ class EventServer:
             self.path.unlink()
 
 
-def listen_for_events(path: Path, post: Callable[[tuple], None]) -> EventServer:
-    return EventServer(path, post)
+def listen_for_events(path: Path, post: Callable[[tuple], None],
+                      loop_on: Callable[[], bool] = lambda: False) -> EventServer:
+    return EventServer(path, post, loop_on)
 
 
 def settings() -> dict:
@@ -602,7 +615,7 @@ def run(claude_args: list[str], force: bool = False, silence: float = SILENCE) -
 
     path = event_socket_path()
     env = dict(os.environ, VOICE_CHAT_SOCKET=str(path))
-    argv = [claude, "--settings", json.dumps(settings()), "--append-system-prompt", INSTRUCTION, *claude_args]
+    argv = [claude, "--settings", json.dumps(settings()), *claude_args]
     stdin, stdout = sys.stdin.fileno(), sys.stdout.fileno()
     saved = termios.tcgetattr(stdin)
     resized = threading.Event()
@@ -624,8 +637,8 @@ def run(claude_args: list[str], force: bool = False, silence: float = SILENCE) -
     terminal = Terminal(argv, env)
     fx.terminal = terminal
     try:
-        server = EventServer(path, post)
         session = Session(fx)
+        server = EventServer(path, post, lambda: session.on)
         signal.signal(signal.SIGWINCH, on_resize)
         os.dup2(log_fd, 2)  # errors from threads go to the log, never over Claude's screen
         tty.setraw(stdin)

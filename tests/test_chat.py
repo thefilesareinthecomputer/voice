@@ -299,6 +299,25 @@ class TestHookRelay(TempState):
             time.sleep(0.01)
         self.assertEqual(received, [("reply", "<speak>Hi.</speak>")])
 
+    def prompt_hook_output(self, loop_on: bool) -> str:
+        path = chat.event_socket_path()
+        server = chat.listen_for_events(path, lambda event: None, lambda: loop_on)
+        self.addCleanup(server.close)
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"VOICE_CHAT_SOCKET": str(path)}), \
+                mock.patch("sys.stdin", io.StringIO('{"hook_event_name": "UserPromptSubmit"}')), \
+                mock.patch("sys.stdout", out):
+            self.assertEqual(chat.hook(), 0)
+        return out.getvalue()
+
+    def test_while_the_loop_is_on_each_message_asks_for_the_spoken_line(self) -> None:
+        note = json.loads(self.prompt_hook_output(loop_on=True))["hookSpecificOutput"]
+        self.assertEqual(note["hookEventName"], "UserPromptSubmit")
+        self.assertEqual(note["additionalContext"], chat.INSTRUCTION)
+
+    def test_while_the_loop_is_off_claude_code_gets_nothing_extra(self) -> None:
+        self.assertEqual(self.prompt_hook_output(loop_on=False), "")
+
     def test_the_hook_ignores_a_socket_outside_the_state_folder(self) -> None:
         with mock.patch.dict(os.environ, {"VOICE_CHAT_SOCKET": "/tmp/elsewhere.sock"}), \
                 mock.patch("sys.stdin", io.StringIO('{"hook_event_name": "Stop"}')), \
