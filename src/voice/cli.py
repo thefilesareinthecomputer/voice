@@ -86,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
                       help="turn the loop of the running voice chat off or on; for a global keyboard shortcut")
     chat.add_argument("--hook", action="store_true", help=argparse.SUPPRESS)  # run by Claude Code, not by hand
 
-    sub.add_parser("setup", help="download the default models")
+    sub.add_parser("setup", help="download the models, then check the speaker, microphone and Claude Code")
 
     shrink = sub.add_parser("shrink", help="write a 16-bit copy of the speech-to-text model")
     shrink.add_argument("--force", action="store_true", help="run even under critical memory pressure")

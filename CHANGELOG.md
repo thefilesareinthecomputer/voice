@@ -6,6 +6,8 @@ All notable changes to this project are listed here. The format follows [Keep a 
 
 ### Added
 
+- `install.sh` installs `voice` pinned to the tested versions and runs the setup, so installing is clone, `cd` and `./install.sh`. Run it again after `git pull` to update.
+- `voice setup` walks a new user through the rest in a terminal: it plays a sentence, listens to one, checks for Claude Code, and shows the keyboard shortcuts with an offer to open the Shortcuts app.
 - `voice chat` runs Claude Code in the terminal with a hands-free spoken loop, and it is the one way to use `voice` with Claude Code: the earlier `/voice` hook and command for ordinary sessions are gone. Claude speaks a short summary of each reply, the microphone opens once playback ends, and a pause of three seconds, or whatever `--silence` sets, submits what you said. Any key takes over from the loop, and Control+Q turns it off and on. `voice chat --toggle` does the same from a global keyboard shortcut. It needs no change to `~/.claude`. Claude is asked for the spoken summary only while the loop is on; with the loop off, Claude Code works as it always does.
 - A background speaker: `voice speak --warm` keeps Kokoro loaded, so speech starts in about half a second instead of about four, and `voice speak --release` frees it. `voice serve` runs it in the foreground.
 - `voice listen --toggle` for a keyboard shortcut: the first press starts a background recording with a sound and a notification, the next press stops it, and the text is transcribed and copied. No silence cutoff; a recording stops on its own after 30 minutes.

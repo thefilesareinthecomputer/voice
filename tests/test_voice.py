@@ -796,13 +796,44 @@ class TestSetup(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.dict(os.environ, {"VOICE_STT_MODEL": tmp}), \
                 mock.patch("huggingface_hub.snapshot_download", return_value="/cache/snap") as hub, \
+                mock.patch("sys.stdin", mock.Mock(isatty=lambda: False)), \
                 mock.patch("sys.stderr", new_callable=io.StringIO) as err:
             self.assertEqual(setup.run(), 0)
         (call,) = hub.call_args_list  # the local speech-to-text folder needs no download
         self.assertEqual(call.args, (models.TTS_MODEL,))
         self.assertEqual(call.kwargs, {"revision": models.REVISIONS[models.TTS_MODEL]})
-        self.assertIn("listen --toggle", err.getvalue())  # the line a keyboard shortcut runs
-        self.assertIn("voice shrink", err.getvalue())
+        self.assertIn("voice listen", err.getvalue())  # what to try next, with no terminal to walk through
+
+    def guided(self, answers: list[str], heard: str, claude: str | None) -> tuple[str, mock.Mock, mock.Mock]:
+        """Run setup in a terminal with the downloads, the models and the devices faked."""
+        which = {"claude": claude, "voice": "/bin/voice"}
+        with mock.patch.object(setup, "download"), \
+                mock.patch("sys.stdin", mock.Mock(isatty=lambda: True)), \
+                mock.patch("builtins.input", side_effect=answers), \
+                mock.patch.object(speak, "run") as spoke, \
+                mock.patch.object(models, "loaded", return_value=contextlib.nullcontext("model")), \
+                mock.patch.object(listen, "record", return_value=np.ones(10, "float32")), \
+                mock.patch.object(listen, "transcribe_with", return_value=heard), \
+                mock.patch.object(setup.shutil, "which", side_effect=which.get), \
+                mock.patch.object(setup.subprocess, "run") as opened, \
+                mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(setup.run(), 0)
+        return err.getvalue(), spoke, opened
+
+    def test_in_a_terminal_setup_checks_the_speaker_microphone_and_claude_code(self) -> None:
+        out, spoke, opened = self.guided(["", "n"], heard="testing one two", claude="/bin/claude")
+        spoke.assert_called_once()
+        self.assertIn("Heard: testing one two", out)
+        self.assertIn("run `voice chat`", out)
+        self.assertIn("/bin/voice listen --toggle", out)
+        self.assertIn("/bin/voice chat --toggle", out)
+        opened.assert_not_called()
+
+    def test_setup_points_to_claude_code_and_the_microphone_setting_and_opens_shortcuts(self) -> None:
+        out, _, opened = self.guided(["", "y"], heard="", claude=None)
+        self.assertIn("Privacy & Security > Microphone", out)
+        self.assertIn("Claude Code is not installed", out)
+        opened.assert_called_once_with(["/usr/bin/open", "-a", "Shortcuts"], check=False)
 
 
 class TestCli(unittest.TestCase):

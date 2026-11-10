@@ -10,7 +10,8 @@ Anything that makes voice do one of these:
 
 - reach the network outside `voice setup`;
 - read or write files outside the Hugging Face cache, its state folder, its models folder and the clipboard;
-- write a transcript anywhere but the clipboard, or the terminal `voice listen` prints to;
+- write a transcript anywhere but the clipboard, the terminal `voice listen` prints to, or the Claude Code prompt `voice chat` types into;
+- type into Claude Code anything other than what you said;
 - run code from a model, or load a model family other than Kokoro and Parakeet;
 - signal a process that is not its own.
 
