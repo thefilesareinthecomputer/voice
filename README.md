@@ -32,6 +32,7 @@ Everything runs on your Mac through [mlx-audio](https://github.com/Blaizzy/mlx-a
 
 - **Fast, accurate dictation.** On an M1, NVIDIA's Parakeet transcribes normal speech in about half a second once the model is loaded.
 - **Natural voices.** Kokoro-82M has 54 voices. `voice` reads English, so the American and British voices fit best.
+- **Hands-free while you work.** Leave `voice chat` running in a terminal and switch to your browser or any other app. What you say still goes to Claude, and a global shortcut turns the loop on and off from anywhere.
 - **Light on memory.** Each command loads its model, does one job and frees it before it exits. A model stays loaded only while the background speaker or a voice chat is running.
 - **Offline after setup.** `voice setup` downloads the models once, and every other command works without a network connection.
 
@@ -140,11 +141,12 @@ voice chat --silence 5      # wait for five seconds of quiet before ending your 
 
 Any option `voice` doesn't know goes to `claude`, such as `--model` or `--resume`.
 
+- **You can work in other apps meanwhile.** Your words are typed into Claude's own terminal, not the window in front, so the terminal can sit in the background. Closing it ends the session. Approving a permission request still needs that terminal.
 - **Typing always takes over.** Any key you press while it talks or listens stops that, and the key still goes to Claude.
 - **Control+Q turns the loop off and on.** So does saying "voice chat off" on its own. After 30 seconds with nothing said, it turns off by itself, with a sound and a notification.
 - **Sounds mark each step.** A tick means the microphone is open. A pop means it closed and your words are on their way.
 - **The microphone never hears the speaker.** It opens only after the speaking ends.
-- **A global shortcut works from any app.** Bind `~/.local/bin/voice chat --toggle` to a key such as Control+Option+Command+C, the same way as [the dictation shortcut](#from-a-keyboard-shortcut). It turns the loop of the newest running session off or on. A terminal never passes Command shortcuts to the program inside it, so this is the only way to use one.
+- **A global shortcut works from any app.** This is a second shortcut, separate from dictation's. Bind `~/.local/bin/voice chat --toggle` to a key such as Control+Option+Command+C, the same way as [the dictation shortcut](#from-a-keyboard-shortcut). It turns the loop of the newest running session off or on. A terminal never passes Command shortcuts to the program inside it, so this is the only way to use one.
 
 Claude Code needs no setup for this. `voice chat` adds its hooks and its summary instruction to this one session through command-line flags, and nothing in `~/.claude` changes. Your terminal app needs microphone access, which macOS asks for the first time.
 
