@@ -131,7 +131,7 @@ voice speak --stop
 ```
 
 - A new `speak` stops the one already playing.
-- On its own, `speak` takes about 4 seconds to start. `voice speak --warm` keeps the model loaded in the background, about 450 MB, so each `speak` starts in about half a second. `voice speak --release` frees it.
+- On its own, `speak` takes about 4 seconds to start. `voice speak --warm` keeps the model loaded in the background, about 450 MB, so each `speak` starts in about half a second. `voice speak --release` frees it, and it frees itself after ten minutes with no request.
 - `--speed` goes from 0.5 to 2.0.
 - `voice voices` lists the 54 voices. The first letter is the accent (`a` American, `b` British). The second is `f` female or `m` male. The default is `af_heart`.
 
@@ -194,7 +194,7 @@ The first lists the exact package versions from `uv.lock`, the ones the tests an
 
 ### Memory
 
-Every command is its own short process: it loads one model, does its job and frees the model before it exits. There are two exceptions: the background speaker holds Kokoro from `voice speak --warm` until `--release`, and `voice chat` holds Parakeet while its loop is on.
+Every command is its own short process: it loads one model, does its job and frees the model before it exits. There are two exceptions: the background speaker holds Kokoro from `voice speak --warm` until `--release` or ten minutes with no request, and `voice chat` holds Parakeet while its loop is on. Closing the terminal window or ending `voice chat` with a kill still releases what that session loaded.
 
 Before loading a model, `voice` checks macOS's memory-pressure level. At critical, it refuses with a message instead of pushing the machine into swap. `--force` loads anyway.
 
@@ -204,7 +204,7 @@ Before loading a model, `voice` checks macOS's memory-pressure level. At critica
 - **Transcript:** the text goes to your clipboard, and to your cursor with `--paste`. In a terminal, `voice listen` also prints it. On the clipboard it is marked concealed, the [nspasteboard.org](http://nspasteboard.org) convention that tells clipboard-history apps to leave it out of their history. Notifications say how many words were heard, never what they were, because macOS keeps notification text.
 - **Universal Clipboard:** when Handoff is on, macOS can share the clipboard with your other nearby Apple devices. Turn off Handoff in **System Settings > General > AirDrop & Handoff** to keep the text on this Mac.
 - **Network:** after `voice setup`, `voice` makes no network requests. Every other command sets `HF_HUB_OFFLINE=1` before any model library is imported.
-- **Voice chat:** what you say is typed into Claude Code as your message, so it goes wherever your Claude Code messages go. The summary Claude speaks is played locally and never stored.
+- **Voice chat:** what you say is typed into Claude Code as your message, so it goes wherever your Claude Code messages go. Until Claude Code reports that message, a copy stays in `~/.local/state/claude-voice/chat-<pid>.unsent.txt`, readable only by you, so a message that never arrives is not lost. The summary Claude speaks is played locally and never stored.
 - **Voice chat and other programs:** any program running as you can reach a session's socket and turn its loop on, the same as `voice chat --toggle`, and the start sound plays when it does. It can also send a made-up prompt or reply, so the loop stops listening or speaks text of its choosing, or turn the loop off. While the microphone is open, any sound it hears, including speech another program plays, is typed in as your message. A leading `/`, `!` or `#` is stripped first, so it arrives as plain text and can't run a slash command, a shell command or a memory write.
 - **Files:** `voice` keeps its lock files, sockets and error logs in `~/.local/state/claude-voice/` (under `$XDG_STATE_HOME` when that is set), a folder only you can read. `voice shrink` writes its copies to `~/.local/share/voice/models/`, each in a folder only you can read. The logs never hold a transcript. `voice` trusts a pid file only while its process is alive and holds a lock on that file, so it never signals a process that has exited.
 

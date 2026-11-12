@@ -5,7 +5,8 @@ server it takes about 0.3 s.
 
 It runs only while something asks for it: `voice speak --warm` starts it in the
 background and `voice speak --release` stops it and frees the model. `voice chat` starts it
-for its session.
+for its session. Ten minutes with no request also stops it, so a session that was killed
+cannot leave the model loaded; the next request starts it again.
 
 One request at a time plays. A newer one, or a stop, ends the one playing, and the
 client of the ended request is told it is done, so `voice speak` keeps its old
@@ -33,6 +34,7 @@ PIDFILE = state.STATE / "serve.pid"
 LOG = state.STATE / "serve.log"
 MAX_REQUEST = 1_000_000   # bytes; `speak` sends at most 100,000 characters
 STARTUP_WAIT = 30.0       # seconds a client waits for a server that is still loading
+IDLE_SECONDS = 600.0      # with no request for this long, the server stops and frees the model
 WARM_TEXT = "Ready."
 
 
@@ -159,9 +161,19 @@ def bind() -> socket.socket:
 
 
 def serve_forever(sock: socket.socket, speaker: Speaker) -> None:
+    """Serve until a quit request, or until IDLE_SECONDS pass with no request and nothing
+    playing: a session that was killed never sends the quit, and the model must not stay
+    loaded for days because of it."""
+    sock.settimeout(IDLE_SECONDS)
     try:
         while True:
-            conn, _ = sock.accept()
+            try:
+                conn, _ = sock.accept()
+            except TimeoutError:
+                current = speaker.current
+                if current is not None and current[0].is_alive():
+                    continue
+                return
             conn.settimeout(5)  # for the request; a say then waits as long as playback takes
             try:
                 message = json.loads(read_line(conn))
@@ -213,7 +225,8 @@ def request(message: dict, timeout: float | None = 5.0) -> str | None:
         sock.connect(str(SOCKET))
         sock.sendall(json.dumps(message).encode() + b"\n")
         sock.settimeout(timeout)
-        return read_line(sock).decode(errors="replace")
+        # An empty reply is a server that closed as this request arrived: the same as none.
+        return read_line(sock).decode(errors="replace") or None
     except OSError:
         return None
     finally:

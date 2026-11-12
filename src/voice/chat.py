@@ -72,6 +72,8 @@ REPORTS = re.compile(rb"\x1b\[[IO]"                       # focus in, out
                      rb"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # colors and other OSC answers
                      rb"|\x1b[P_][^\x1b]*\x1b\\")         # version (DCS); graphics (APC)
 OFF_PHRASES = {"voice chat off", "stop listening"}
+DIALOG_NOTICES = {"permission_prompt", "elicitation_dialog"}  # notifications that mean a dialog is open
+DIALOG_TOOLS = ("AskUserQuestion", "ExitPlanMode")             # tools that open one
 SOUNDS = {"on": "/System/Library/Sounds/Glass.aiff", "off": "/System/Library/Sounds/Bottle.aiff"}
 SOUND_SECONDS = 1.7    # the on sound lasts 1.65 s; afplay itself stays up about a second longer
 
@@ -116,6 +118,8 @@ class Session:
         self.phase = "idle"     # or "speaking" or "listening"
         self.generation = 0
         self.pending: str | None = None  # a reply that came in while a summary played
+        self.held: str | None = None     # what was said while Claude was mid-turn, not yet typed
+        self.sent: str | None = None     # the message typed last, until Claude Code reports that prompt
 
     def start(self) -> None:
         if self.fx.load():
@@ -137,10 +141,23 @@ class Session:
             # Claude starts itself (a background task or another agent finishing) must not cut
             # off the summary playing or the user mid-sentence.
             self.busy = True
+            # The copy on disk goes only when this prompt is exactly the message that was typed.
+            # Any other prompt, such as a turn another agent started or a later message that
+            # happens to hold the same words, proves nothing about it.
+            prompt = plain(event[1]) if len(event) > 1 else ""
+            if self.sent is not None and self.sent == prompt:
+                sent, self.sent = self.sent, None
+                self.fx.delivered(sent)
+        elif kind == "dialog":
+            # A question dialog is opening, so a turn is under way even if no prompt event said
+            # so. Text typed now would go into the dialog and be dropped.
+            self.busy = True
         elif kind == "reply":
             # No prompt event needs to come first: Claude starts some turns itself, and their
             # replies are spoken too.
             self.busy = False
+            if self._flush():  # what was said during the turn goes in now, ahead of any summary
+                return
             if not self.on or self.phase == "listening":  # never talk over the user
                 return
             if self.phase == "speaking":
@@ -149,6 +166,8 @@ class Session:
                 self._reply(event[1])
         elif kind == "notice":
             # A permission request mid-turn. While idle the microphone may be open, so stay quiet.
+            if len(event) > 2 and event[2]:  # a dialog is on screen: the same as "dialog" above
+                self.busy = True
             if self.on and self.busy and self.phase == "idle":
                 self._say(event[1])
         elif kind == "spoken":
@@ -162,6 +181,8 @@ class Session:
         elif kind == "heard" and event[1] == self.generation and self.phase == "listening":
             self.phase = "idle"
             self._heard(event[2])
+        elif kind == "resume" and event[1] == self.generation and not self.busy and self._flush():
+            pass  # an interrupted turn ended with a message held: it has gone in
         elif kind == "resume" and event[1] == self.generation and self.on and not self.busy and self.phase == "idle":
             self._listen()
 
@@ -230,7 +251,30 @@ class Session:
         elif off_phrase(text):
             self._turn_off()
         else:
-            self.fx.submit(text.strip())
+            self._deliver(text.strip())
+
+    def _deliver(self, text: str) -> None:
+        """Type what was said into Claude's prompt, but never while Claude is mid-turn: a question
+        or permission dialog on screen then would take the text and drop it. A message heard
+        during a turn is held and goes in when the turn ends. Either way a copy is on disk
+        first and stays there until Claude Code reports that same prompt."""
+        text = plain(text)
+        self.fx.keep(text)
+        if self.busy:
+            self.held = text if self.held is None else f"{self.held} {text}"
+            self.fx.notify("voice chat: message held", "Claude is working. Your message is saved and "
+                           "will be sent when this turn ends.")
+        else:
+            self.sent = text
+            self.fx.submit(text)
+
+    def _flush(self) -> bool:
+        """Send a held message once Claude is free. True when one was sent."""
+        if self.held is None or self.busy:
+            return False
+        self.sent, self.held = self.held, None
+        self.fx.submit(self.sent)
+        return True
 
     def _cancel(self) -> None:
         if self.phase == "speaking":
@@ -362,6 +406,37 @@ class Devices:
         if self.terminal is not None:
             self.terminal.submit(text)
 
+    def keep(self, text: str) -> None:
+        """Append what was said to this session's unsent file, so a message that never reaches
+        Claude Code, or a session that is killed, cannot lose it."""
+        with contextlib.suppress(OSError):
+            fd = os.open(unsent_path(), os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "a") as out:
+                out.write(text + "\n\n")
+
+    def delivered(self, text: str) -> None:
+        """Claude Code reported `text` as a prompt: take it, and only it, out of the unsent file."""
+        with contextlib.suppress(OSError):
+            path = unsent_path()
+            blocks = [block for block in path.read_text().split("\n\n") if block]
+            for start in range(len(blocks)):
+                for end in range(start + 1, len(blocks) + 1):  # a held message is several, joined
+                    if " ".join(blocks[start:end]) == text:
+                        del blocks[start:end]
+                        if not blocks:
+                            path.unlink()
+                            return
+                        # Written beside the file and moved over it, so a failure part way
+                        # through leaves the old file whole.
+                        spare = path.with_name(path.name + ".tmp")
+                        with contextlib.suppress(FileNotFoundError):
+                            spare.unlink()
+                        fd = os.open(spare, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                        with os.fdopen(fd, "w") as out:
+                            out.write("".join(block + "\n\n" for block in blocks))
+                        os.replace(spare, path)
+                        return
+
     def cue(self, kind: str) -> None:
         with contextlib.suppress(OSError):
             self.sound = subprocess.Popen([listen.AFPLAY, SOUNDS[kind]],
@@ -384,11 +459,15 @@ def log(exc: BaseException) -> None:
     print(type(exc).__name__, file=sys.stderr)
 
 
+def plain(text: str) -> str:
+    """A transcript as it is typed: no control characters, so it can never press a key, and no
+    leading /, ! or #, which Claude Code reads as a command or a mode switch even when pasted."""
+    return " ".join(CONTROL.sub(" ", text).split()).lstrip("/!# ")
+
+
 def paste_bytes(text: str, bracketed: bool) -> bytes:
-    """The transcript as terminal input, with no control characters, so it can never press a key,
-    and no leading /, ! or #, which Claude Code reads as a command or a mode switch even when
-    pasted. Bracketed, when the app asked for it."""
-    clean = " ".join(CONTROL.sub(" ", text).split()).lstrip("/!# ").encode()
+    """The transcript as terminal input. Bracketed, when the app asked for it."""
+    clean = plain(text).encode()
     return b"\x1b[200~" + clean + b"\x1b[201~" if bracketed else clean
 
 
@@ -470,6 +549,11 @@ def event_socket_path() -> Path:
     return state.STATE / f"chat-{os.getpid()}.sock"
 
 
+def unsent_path() -> Path:
+    """Where this session keeps what was said until Claude Code reports the prompt."""
+    return state.STATE / f"chat-{os.getpid()}.unsent.txt"
+
+
 def event(payload: Any) -> tuple | None:
     """The session event for a hook payload, or None for one the loop ignores."""
     if not isinstance(payload, dict):
@@ -480,13 +564,17 @@ def event(payload: Any) -> tuple | None:
     if name == "Off":  # from another session whose loop came on
         return ("off",)
     if name == "UserPromptSubmit":
-        return ("prompt",)
+        prompt = payload.get("prompt")
+        return ("prompt", prompt if isinstance(prompt, str) else "")
+    if name == "PreToolUse":
+        return ("dialog",) if payload.get("tool_name") in DIALOG_TOOLS else None
     text = payload.get("last_assistant_message" if name == "Stop" else "message")
     text = text if isinstance(text, str) else ""
     if name == "Stop":
         return ("reply", text)
     if name == "Notification":
-        return ("notice", " ".join(CONTROL.sub(" ", text).split())[:MAX_SPOKEN])
+        return ("notice", " ".join(CONTROL.sub(" ", text).split())[:MAX_SPOKEN],
+                payload.get("notification_type") in DIALOG_NOTICES)
     return None
 
 
@@ -501,7 +589,7 @@ def hook() -> int:
         payload = json.loads(sys.stdin.read(serve.MAX_REQUEST))
         if not isinstance(payload, dict):
             return 0
-        keep = ("hook_event_name", "last_assistant_message", "message")
+        keep = ("hook_event_name", "last_assistant_message", "message", "prompt", "tool_name", "notification_type")
         message = json.dumps({k: payload[k] for k in keep if k in payload}).encode() + b"\n"
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(2)
@@ -572,7 +660,7 @@ class EventServer:
                     found = event(json.loads(serve.read_line(conn)))
                     if found is not None:
                         post(found)
-                    if found == ("prompt",):
+                    if found is not None and found[0] == "prompt":
                         conn.sendall(b"on\n" if self.loop_on() else b"off\n")
 
     def close(self) -> None:
@@ -590,7 +678,17 @@ def settings() -> dict:
     """The hooks this session adds to Claude Code through --settings."""
     command = " ".join(shlex.quote(part) for part in [sys.executable, "-I", "-m", "voice.cli", "chat", "--hook"])
     entry = [{"hooks": [{"type": "command", "command": command, "timeout": 5}]}]
-    return {"hooks": {"UserPromptSubmit": entry, "Stop": entry, "Notification": entry}}
+    question = [{"matcher": "|".join(DIALOG_TOOLS), **entry[0]}]  # dialogs the typed text must not land in
+    return {"hooks": {"UserPromptSubmit": entry, "Stop": entry, "Notification": entry, "PreToolUse": question}}
+
+
+ENDING_SIGNALS = (signal.SIGHUP, signal.SIGTERM)
+
+
+def ended(signum: int, _frame: Any) -> None:
+    """A closed terminal window or a kill: leave through the cleanup in `run`, which ends Claude
+    Code, removes the session's socket and releases the speaker this session started."""
+    raise SystemExit(128 + signum)
 
 
 def run(claude_args: list[str], force: bool = False, silence: float = SILENCE) -> int:
@@ -640,6 +738,8 @@ def run(claude_args: list[str], force: bool = False, silence: float = SILENCE) -
         session = Session(fx)
         server = EventServer(path, post, lambda: session.on)
         signal.signal(signal.SIGWINCH, on_resize)
+        for ending in ENDING_SIGNALS:  # a closed window or a kill still runs the cleanup below
+            signal.signal(ending, ended)
         os.dup2(log_fd, 2)  # errors from threads go to the log, never over Claude's screen
         tty.setraw(stdin)
         terminal.resize(stdin)
@@ -663,8 +763,11 @@ def run(claude_args: list[str], force: bool = False, silence: float = SILENCE) -
                     session.handle(events.get())
         return terminal.wait()
     finally:
+        for ending in ENDING_SIGNALS:  # first: a second signal must not cut the cleanup short
+            signal.signal(ending, signal.SIG_IGN)
         fx.closing = True
-        termios.tcsetattr(stdin, termios.TCSAFLUSH, saved)
+        with contextlib.suppress(termios.error, OSError):  # the terminal may already be gone
+            termios.tcsetattr(stdin, termios.TCSAFLUSH, saved)
         signal.signal(signal.SIGWINCH, signal.SIG_DFL)
         fx.stop_listening()
         fx.unload()
@@ -676,3 +779,5 @@ def run(claude_args: list[str], force: bool = False, silence: float = SILENCE) -
         os.dup2(saved_err, 2)
         os.close(saved_err)
         os.close(log_fd)
+        for ending in ENDING_SIGNALS:
+            signal.signal(ending, signal.SIG_DFL)

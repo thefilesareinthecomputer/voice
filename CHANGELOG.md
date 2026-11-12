@@ -20,6 +20,8 @@ All notable changes to this project are listed here. The format follows [Keep a 
 
 ### Changed
 
+- The background speaker stops and frees its model after ten minutes with no request, and `voice chat` runs its cleanup when the terminal window closes or the process is killed. Before, a session that ended that way left the speaker loaded until `voice speak --release`.
+- In `voice chat`, what you say while Claude is mid-turn is no longer typed into the terminal, where a question or permission dialog on screen would take the text and drop it. The message is held and sent when the turn ends, and a question or permission dialog counts as a turn even when another agent started it. Every message is also written to `~/.local/state/claude-voice/chat-<pid>.unsent.txt` before it is typed and removed only once Claude Code reports that same message as a prompt, so a message that does not arrive, or a session that is killed, leaves the text on disk.
 - The start sound and notification come once the microphone is open, and notifications no longer hold up the recording, so the first words are no longer lost.
 - The microphone ignores what it hears while the start sound plays. Through built-in speakers that sound counted as speech, so a pause ended the turn before you said a word.
 - In `voice chat`, a pause after a sound with no words (a click, a cough, room noise) keeps listening instead of ending the turn; mouse movement and clicks no longer stop the speech or the listening; and turning a loop on switches any other running voice chat to plain typing.

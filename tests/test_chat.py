@@ -78,6 +78,76 @@ class TestSession(TempState):
         self.session.handle(("heard", self.listening_generation_after_reply(), "run the tests"))
         self.assertEqual(self.fx.calls[-1], ("submit", "run the tests"))
 
+    def test_what_is_heard_while_claude_works_is_held_and_sent_when_the_turn_ends(self) -> None:
+        """A turn another agent started may have a question dialog on screen, and text typed
+        into a dialog is lost: nothing is typed until the turn ends."""
+        self.session.handle(("prompt",))  # a turn the user did not start
+        self.session.handle(("heard", self.session.generation, "a long message"))
+        self.session.handle(("heard", self.session.generation, "ignored: the generation moved on"))
+        self.assertNotIn("submit", self.fx.names())
+        self.assertIn(("keep", "a long message"), self.fx.calls)
+        self.assertIn("notify", self.fx.names())
+        self.session.handle(("reply", "<speak>Done.</speak>"))
+        self.assertEqual(self.fx.calls[-1], ("submit", "a long message"))
+        self.assertNotIn("say", self.fx.names())  # the user's message goes first
+
+    def test_a_held_message_goes_in_after_an_interrupted_turn(self) -> None:
+        self.session.handle(("prompt",))
+        self.session.handle(("heard", self.session.generation, "held words"))
+        self.session.keys(b"\x1b")  # Escape: no reply event follows
+        self.session.handle(self.fx.calls[-1][2])  # the resume timer fires
+        self.assertEqual(self.fx.calls[-1], ("submit", "held words"))
+
+    def test_the_copy_on_disk_is_kept_until_claude_code_reports_the_prompt(self) -> None:
+        self.session.handle(("heard", self.session.generation, "do it"))
+        self.assertEqual(self.fx.calls[-2:], [("keep", "do it"), ("submit", "do it")])
+        self.assertNotIn("delivered", self.fx.names())
+        self.session.handle(("prompt", "do it"))
+        self.assertEqual(self.fx.calls[-1], ("delivered", "do it"))
+
+    def test_a_prompt_that_is_not_the_typed_message_keeps_the_copy(self) -> None:
+        """The text went into a dialog, and then another agent's message or the user's next
+        typed prompt starts a turn: neither shows that Claude Code got what was said."""
+        self.session.handle(("heard", self.session.generation, "what I said"))
+        for other in (("prompt", "Another Claude session sent a message"), ("prompt", ""), ("prompt",),
+                      ("prompt", "that is not what I said at all")):  # holds the words, is not the message
+            self.session.handle(other)
+        self.assertNotIn("delivered", self.fx.names())
+        self.session.handle(("prompt", "  what I said\n"))
+        self.assertEqual(self.fx.calls[-1], ("delivered", "what I said"))
+
+    def test_a_question_or_permission_dialog_holds_what_is_said(self) -> None:
+        for sign in (("dialog",), ("notice", "Claude needs your permission", True)):
+            fx = FakeEffects()
+            session = chat.Session(fx)
+            session.start()
+            session.handle(sign)  # no prompt event came first
+            session.handle(("heard", session.generation, "more words"))
+            self.assertNotIn("submit", fx.names())
+            session.handle(("reply", "x"))
+            self.assertEqual(fx.calls[-1], ("submit", "more words"))
+
+    def test_a_notice_with_no_dialog_holds_nothing(self) -> None:
+        self.session.handle(("notice", "Claude is waiting for your input", False))
+        self.session.handle(("heard", self.session.generation, "hello"))
+        self.assertEqual(self.fx.calls[-1], ("submit", "hello"))
+
+    def test_the_unsent_file_is_private_and_loses_only_what_was_delivered(self) -> None:
+        fx = chat.Devices(lambda event: None, force=True)
+        chat.state.folder()
+        for text in ("first", "second", "third"):
+            fx.keep(text)
+        path = chat.unsent_path()
+        self.assertEqual(path.read_text(), "first\n\nsecond\n\nthird\n\n")
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        fx.delivered("something else")
+        self.assertEqual(path.read_text(), "first\n\nsecond\n\nthird\n\n")
+        fx.delivered("second third")  # two messages held and sent as one
+        self.assertEqual(path.read_text(), "first\n\n")
+        fx.delivered("first")
+        self.assertFalse(path.exists())
+        fx.delivered("first")  # nothing to remove is not an error
+
     def listening_generation_after_reply(self) -> int:
         self.asked()
         self.session.handle(("reply", "x"))
@@ -279,9 +349,10 @@ class TestSummary(TempState):
 
 
 class TestHookRelay(TempState):
-    def test_settings_add_three_hooks_that_run_this_python_in_isolated_mode(self) -> None:
+    def test_settings_add_hooks_that_run_this_python_in_isolated_mode(self) -> None:
         settings = chat.settings()
-        self.assertEqual(sorted(settings["hooks"]), ["Notification", "Stop", "UserPromptSubmit"])
+        self.assertEqual(sorted(settings["hooks"]), ["Notification", "PreToolUse", "Stop", "UserPromptSubmit"])
+        self.assertEqual(settings["hooks"]["PreToolUse"][0]["matcher"], "AskUserQuestion|ExitPlanMode")
         command = settings["hooks"]["Stop"][0]["hooks"][0]["command"]
         self.assertEqual(shlex.split(command), [sys.executable, "-I", "-m", "voice.cli", "chat", "--hook"])
 
@@ -331,9 +402,15 @@ class TestHookRelay(TempState):
                 self.assertEqual(chat.hook(), 0)
 
     def test_events_from_the_socket(self) -> None:
-        self.assertEqual(chat.event({"hook_event_name": "UserPromptSubmit"}), ("prompt",))
+        self.assertEqual(chat.event({"hook_event_name": "UserPromptSubmit"}), ("prompt", ""))
+        self.assertEqual(chat.event({"hook_event_name": "UserPromptSubmit", "prompt": "hi"}), ("prompt", "hi"))
         self.assertEqual(chat.event({"hook_event_name": "Stop", "last_assistant_message": 3}), ("reply", ""))
-        self.assertEqual(chat.event({"hook_event_name": "Notification", "message": "x"}), ("notice", "x"))
+        self.assertEqual(chat.event({"hook_event_name": "Notification", "message": "x"}), ("notice", "x", False))
+        self.assertEqual(chat.event({"hook_event_name": "Notification", "message": "x",
+                                     "notification_type": "permission_prompt"}), ("notice", "x", True))
+        self.assertEqual(chat.event({"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion"}), ("dialog",))
+        self.assertEqual(chat.event({"hook_event_name": "PreToolUse", "tool_name": "ExitPlanMode"}), ("dialog",))
+        self.assertIsNone(chat.event({"hook_event_name": "PreToolUse", "tool_name": "Bash"}))
         self.assertEqual(chat.event({"hook_event_name": "Toggle"}), ("toggle",))
         self.assertIsNone(chat.event({"hook_event_name": "Other"}))
         self.assertIsNone(chat.event([]))
@@ -482,6 +559,16 @@ class TestRun(TempState):
             with contextlib.suppress(OSError):
                 os.close(int(fd))
         self.assertTrue((self.state / "chat.log").exists())
+
+    def test_a_closed_window_or_a_kill_leaves_through_the_cleanup(self) -> None:
+        """Without a handler either signal ends the process on the spot, and the speaker this
+        session started stays loaded with nothing left to release it."""
+        import signal
+
+        self.assertEqual(set(chat.ENDING_SIGNALS), {signal.SIGHUP, signal.SIGTERM})
+        with self.assertRaises(SystemExit) as raised:
+            chat.ended(signal.SIGHUP, None)
+        self.assertEqual(raised.exception.code, 128 + signal.SIGHUP)
 
 
 class TestTerminal(TempState):

@@ -249,3 +249,27 @@ class TestServeRun(TempState):
         with mock.patch.object(models, "load_tts") as load:
             self.assertEqual(serve.run(), 0)
         load.assert_not_called()
+
+
+class TestIdle(TempState):
+    """A session that is killed never sends the quit, so the server stops itself when idle."""
+
+    def test_an_idle_server_stops_and_removes_its_socket(self) -> None:
+        state.folder()
+        sock = serve.bind()
+        started = time.monotonic()
+        with mock.patch.object(serve, "IDLE_SECONDS", 0.2):
+            serve.serve_forever(sock, SimpleNamespace(current=None))
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertFalse(serve.SOCKET.exists())
+
+    def test_the_idle_timer_never_stops_a_server_that_is_playing(self) -> None:
+        state.folder()
+        sock = serve.bind()
+        playing = threading.Thread(target=time.sleep, args=(0.7,))
+        playing.start()
+        started = time.monotonic()
+        with mock.patch.object(serve, "IDLE_SECONDS", 0.2):
+            serve.serve_forever(sock, SimpleNamespace(current=(playing, threading.Event())))
+        self.assertGreaterEqual(time.monotonic() - started, 0.7)
+        self.assertFalse(playing.is_alive())
