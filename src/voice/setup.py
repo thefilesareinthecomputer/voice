@@ -2,7 +2,8 @@
 revisions this version was tested against. The other commands run offline and never download.
 
 In a terminal it then walks a new user through the rest: it plays a sentence, listens to one,
-checks for Claude Code, and offers to open the Shortcuts app for the keyboard shortcuts."""
+checks for Claude Code, offers to open the Shortcuts app for the keyboard shortcuts, and
+offers to calibrate the microphone."""
 
 from __future__ import annotations
 
@@ -98,15 +99,32 @@ def offer_shortcuts() -> None:
         subprocess.run(["/usr/bin/open", "-a", "Shortcuts"], check=False)
 
 
+def offer_calibration() -> None:
+    from voice import calibrate
+
+    say("\n5. Calibration (optional, about a minute). It measures your room and your voice, rates")
+    say("   how well this microphone hears you, and tunes speech detection to it. `voice calibrate`")
+    say("   runs it any time. Calibrate now? [y/N] ")
+    if not ask().strip().lower().startswith("y"):
+        return
+    try:
+        calibrate.run()
+    except models.MemoryPressure:
+        say("   Skipped: memory is low right now. Try `voice calibrate` later.")
+    except Exception as exc:  # the last, optional step: report it and let setup finish
+        say(f"   Calibration stopped ({type(exc).__name__}). Try `voice calibrate` later.")
+
+
 def run() -> int:
     download()
     if not sys.stdin.isatty():
         say("\nready. `voice speak \"hello\"` and `voice listen` check the speaker and the microphone.")
         return 0
-    say("\nModels ready. Four quick steps.")
+    say("\nModels ready. Five quick steps.")
     check_speaker()
     check_microphone()
     check_claude()
     offer_shortcuts()
+    offer_calibration()
     say("\nAll set. `voice shrink` makes a smaller copy of the dictation model if you want to save memory.")
     return 0

@@ -12,7 +12,7 @@ from unittest import mock
 
 import numpy as np
 
-from voice import chat, listen, serve, speak, state
+from voice import calibrate, chat, listen, serve, speak, state
 
 VOICE = [sys.executable, "-m", "voice.cli"]
 
@@ -27,12 +27,16 @@ class TempState(unittest.TestCase):
         self.state = Path(os.path.realpath(tmp.name)) / "cv"
         for patcher in (mock.patch.object(state, "STATE", self.state),
                         mock.patch.multiple(listen, PIDFILE=self.state / "listen.pid", LOG=self.state / "listen.log",
-                                            TRANSCRIBING=self.state / "transcribe.lock"),
+                                            TRANSCRIBING=self.state / "transcribe.lock",
+                                            CALIBRATION=self.state / "calibration.json"),
                         mock.patch.multiple(speak, PIDFILE=self.state / "speak.pid",
                                             TICKET=self.state / "speak.latest"),
                         mock.patch.multiple(serve, PIDFILE=self.state / "serve.pid", SOCKET=self.state / "speak.sock",
                                             LOG=self.state / "serve.log"),
-                        mock.patch.object(chat, "LOG", self.state / "chat.log")):
+                        mock.patch.object(chat, "LOG", self.state / "chat.log"),
+                        mock.patch.object(listen, "output_volume", return_value=None),
+                        mock.patch.object(listen, "input_name", return_value=None),
+                        mock.patch.object(calibrate, "EVENTS", self.state / "sound-events.json")):
             patcher.start()
             self.addCleanup(patcher.stop)
 

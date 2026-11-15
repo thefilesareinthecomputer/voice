@@ -539,6 +539,26 @@ class TestDevices(TempState):
         self.assertEqual(posted, [("heard", 1, "")])
         self.assertEqual(len(calls), 1)
 
+    def test_a_quiet_take_is_judged_at_the_level_it_was_recorded_at(self) -> None:
+        # A calibrated quiet voice peaks under the default level; it must still be transcribed.
+        posted: list[tuple] = []
+        done = threading.Event()
+        fx = chat.Devices(lambda event: (posted.append(event), done.set()), force=False)
+        fx.model = mock.Mock(result=mock.Mock(return_value="model"))
+        recorded: list[float] = []
+
+        def record(*args, **kwargs):
+            recorded.append(kwargs["base"])
+            return np.full(10, 0.006, "float32")
+        with mock.patch.object(chat, "quiet"), mock.patch.object(chat.listen, "cue"), \
+                mock.patch.object(chat.listen, "speech_base", return_value=0.004), \
+                mock.patch.object(chat.listen, "record", side_effect=record), \
+                mock.patch.object(chat.listen, "transcribe_with", return_value="quiet words"):
+            fx.listen(1)
+            self.assertTrue(done.wait(5))
+        self.assertEqual(recorded, [0.004])
+        self.assertEqual(posted, [("heard", 1, "quiet words")])
+
 
 class TestRun(TempState):
     def test_a_first_run_makes_the_state_folder_before_it_opens_the_log(self) -> None:
@@ -619,6 +639,14 @@ class TestRecordPatience(TempState):
         with mock.patch.dict(sys.modules, {"sounddevice": sd}):
             audio = listen.record(60, 1.5, patience=1.0)
         self.assertLessEqual(len(audio), int(listen.RATE * 1.05))
+
+    def test_steady_room_noise_does_not_count_as_speech(self) -> None:
+        stream = mock.MagicMock()
+        stream.__enter__.return_value.read.side_effect = lambda n: (np.full((n, 1), 0.02, "float32"), False)
+        sd = mock.Mock(InputStream=mock.Mock(return_value=stream))
+        with mock.patch.dict(sys.modules, {"sounddevice": sd}):
+            audio = listen.record(60, 1.5, patience=1.0)
+        self.assertLessEqual(len(audio), int(listen.RATE * 1.05))  # the patience ended it
 
     def test_what_the_microphone_hears_while_the_start_sound_plays_is_dropped(self) -> None:
         sound = iter([np.ones((1600, 1), "float32")] * 3)  # loud enough to count as speech

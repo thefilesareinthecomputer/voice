@@ -17,6 +17,7 @@ All notable changes to this project are listed here. The format follows [Keep a 
 - `--preload` with `--toggle` loads the model while you talk, for a shorter wait after the stop press.
 - `VOICE_TTS_MODEL` names the text-to-speech model; `VOICE_MODEL` still works.
 - A Troubleshooting section in the README.
+- `voice calibrate`, also offered at the end of `voice setup`, measures the room and your voice from up to four spots and saves a speech level for that microphone. It rates each spot, gives a fix for anything short of good, and checks whether your usual background noise is steady or changing. An optional last step measures short sounds such as a cough or a clap against short words by length, loudness and voicing, as groundwork for keeping such sounds from ending a turn.
 
 ### Changed
 
@@ -25,6 +26,7 @@ All notable changes to this project are listed here. The format follows [Keep a 
 - The start sound and notification come once the microphone is open, and notifications no longer hold up the recording, so the first words are no longer lost.
 - The microphone ignores what it hears while the start sound plays. Through built-in speakers that sound counted as speech, so a pause ended the turn before you said a word.
 - In `voice chat`, a pause after a sound with no words (a click, a cough, room noise) keeps listening instead of ending the turn; mouse movement and clicks no longer stop the speech or the listening; and turning a loop on switches any other running voice chat to plain typing.
+- The level that counts as speech scales with the Mac's output volume instead of staying fixed, from half at the lowest volume to double at the highest. It also never falls below three times the room's measured background noise, so steady noise such as a fan no longer keeps a turn from ending.
 - The background speaker and the microphone recover when the audio device changes or the Mac wakes from sleep, instead of failing every time until restarted.
 - `voice chat` no longer goes quiet after Escape or Control+C stops Claude, after a command such as `/clear`, or after a turn Claude starts by itself; a microphone or model failure says so instead of reading as silence; a speaker that died is started again; and stopping speech never freezes the terminal. A turn Claude starts by itself no longer cuts off the summary playing or you mid-sentence, a reply that lands during a summary plays after it, and Control+Q on a loop left waiting starts listening instead of turning it off.
 - MLX and the Parakeet code import while you talk, which shortens the wait after the stop press.

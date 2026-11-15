@@ -9,6 +9,7 @@
     voice listen --toggle  start recording in the background, or stop it and copy the text
     voice chat             talk with Claude Code hands-free in this terminal; other options go to claude
     voice setup            download the default models once; every other command runs offline
+    voice calibrate        measure the room and your voice, and tune speech detection to this microphone
     voice shrink           write a 16-bit copy of the speech-to-text model: half the size, less memory
 
 Each command loads its model, does one job and releases it before it exits, except the
@@ -87,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     chat.add_argument("--hook", action="store_true", help=argparse.SUPPRESS)  # run by Claude Code, not by hand
 
     sub.add_parser("setup", help="download the models, then check the speaker, microphone and Claude Code")
+    sub.add_parser("calibrate", help="measure the room and your voice, and tune speech detection to this microphone")
 
     shrink = sub.add_parser("shrink", help="write a 16-bit copy of the speech-to-text model")
     shrink.add_argument("--force", action="store_true", help="run even under critical memory pressure")
@@ -161,6 +163,10 @@ def main(argv: list[str] | None = None) -> int:
             from voice import shrink as cmd
 
             return cmd.run(force=args.force)
+        if args.command == "calibrate":
+            from voice import calibrate as cmd
+
+            return cmd.run()
         from voice import setup as cmd
 
         return cmd.run()

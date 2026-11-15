@@ -8,8 +8,10 @@ signalling it: the holder would have to exit and its pid be reused inside that i
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import os
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -32,6 +34,23 @@ def folder() -> Path:
     STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
     STATE.chmod(0o700)  # also closes a folder an older version left readable
     return STATE
+
+
+def write(path: Path, text: str) -> None:
+    """Replace `path` in the state folder with `text` in one step, readable only by this user.
+    Each write gets its own new temporary file, so two writers at once cannot mix their text."""
+    if path.parent != STATE:
+        raise ValueError(f"{path} is outside the state folder")
+    folder()
+    fd, temp = tempfile.mkstemp(dir=STATE, prefix=f"{path.name}.", suffix=".tmp")  # mode 0600
+    try:
+        with os.fdopen(fd, "w") as out:
+            out.write(text)
+        os.replace(temp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temp)
+        raise
 
 
 def _open(path: Path) -> int:

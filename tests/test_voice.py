@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 import shlex
 import subprocess
@@ -18,7 +19,9 @@ from unittest import mock
 import numpy as np
 
 from support import VOICE, FakeStream, TempState
-from voice import cli, listen, models, setup, shrink, speak, state
+from voice import calibrate, cli, listen, models, setup, shrink, speak, state
+
+INPUT_NAME = listen.input_name  # the real one; TempState stands a stub in for it
 
 
 class TestPidLock(TempState):
@@ -218,6 +221,175 @@ class TestEndOfSpeech(unittest.TestCase):
         self.assertFalse(listen.end_of_speech(levels, silence=1.5))
 
 
+class TestSpeechLevel(TempState):
+    def test_the_base_level_scales_with_the_output_volume_within_limits(self) -> None:
+        self.assertAlmostEqual(listen.base_level(None, None), listen.SPEECH_LEVEL)
+        self.assertAlmostEqual(listen.base_level(listen.REFERENCE_VOLUME, None), listen.SPEECH_LEVEL)
+        self.assertAlmostEqual(listen.base_level(75, None), listen.SPEECH_LEVEL * 1.5)
+        self.assertAlmostEqual(listen.base_level(0, None), listen.SPEECH_LEVEL * 0.5)
+        self.assertAlmostEqual(listen.base_level(100, None), listen.SPEECH_LEVEL * 2.0)
+
+    def test_a_calibrated_microphone_starts_from_its_saved_level_and_volume(self) -> None:
+        listen.save_calibration("Brio", 0.004, 40)
+        self.assertAlmostEqual(listen.base_level(40, "Brio"), 0.004)
+        self.assertAlmostEqual(listen.base_level(60, "Brio"), 0.006)
+        self.assertAlmostEqual(listen.base_level(40, "Built-in"), listen.SPEECH_LEVEL * 0.8)
+        self.assertEqual(listen.CALIBRATION.stat().st_mode & 0o777, 0o600)
+
+    def test_a_damaged_calibration_file_falls_back_to_the_defaults(self) -> None:
+        state.folder()
+        for text in ("not json", "[1, 2]", '{"Brio": {"level": -1, "volume": 40}}', '{"Brio": {"level": "x"}}',
+                     '{"Brio": {"level": Infinity, "volume": 40}}', '{"Brio": {"level": true, "volume": 40}}',
+                     '{"Brio": {"level": 2, "volume": 40}}', '{"Brio": {"level": 1' + "0" * 400 + ', "volume": 40}}',
+                     '{"Brio": {"level": 0.004, "volume": 400}}'):
+            listen.CALIBRATION.write_text(text)
+            self.assertAlmostEqual(listen.base_level(None, "Brio"), listen.SPEECH_LEVEL)
+
+    def test_room_noise_raises_the_level_once_measured(self) -> None:
+        noise = [0.02] * listen.NOISE_FRAMES
+        self.assertAlmostEqual(listen.speech_level(noise, 0.01), 0.02 * listen.NOISE_MARGIN)
+        self.assertAlmostEqual(listen.speech_level(noise[:-1], 0.01), 0.01)
+        self.assertAlmostEqual(listen.speech_level([0.001] * 20, 0.005), 0.005)  # a quiet room keeps the base
+
+    def test_speech_in_a_noisy_room_ends_after_the_pause(self) -> None:
+        levels = [0.02] * 10 + [0.2] * 10 + [0.02] * 15
+        threshold = listen.speech_level(levels, listen.SPEECH_LEVEL)
+        self.assertTrue(listen.end_of_speech(levels, 1.5, threshold))
+        self.assertFalse(listen.end_of_speech(levels, 1.5))  # the fixed level would never hear the pause
+
+
+class TestOutputVolume(unittest.TestCase):
+    def test_output_volume_reads_the_setting_and_treats_muted_as_unknown(self) -> None:
+        def run(out: str):
+            return SimpleNamespace(stdout=out)
+        with mock.patch.object(listen.subprocess, "run", return_value=run(
+                "output volume:38, input volume:78, alert volume:100, output muted:false")):
+            self.assertEqual(listen.output_volume(), 38)
+        with mock.patch.object(listen.subprocess, "run", return_value=run(
+                "output volume:38, input volume:78, alert volume:100, output muted:true")):
+            self.assertIsNone(listen.output_volume())
+        with mock.patch.object(listen.subprocess, "run", side_effect=OSError):
+            self.assertIsNone(listen.output_volume())
+
+
+def level(rms: float, seconds: float) -> np.ndarray:
+    return np.full(int(listen.RATE * seconds), rms, "float32")
+
+
+class TestCalibrate(TempState):
+    # Answers, in prompt order: Enter starts, s skips, q finishes the spots. Every run here
+    # starts the room and the first spot, and ends the spots with q unless it says otherwise.
+    def calibrate(self, answers: list[str], takes: list[np.ndarray]) -> tuple[int, str]:
+        """Run `voice calibrate` in a terminal with the microphone, sounds, model and volume faked."""
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: True)), \
+                mock.patch("builtins.input", side_effect=answers), \
+                mock.patch.object(models, "loaded", return_value=contextlib.nullcontext("model")), \
+                mock.patch.object(listen, "record", side_effect=takes), \
+                mock.patch.object(listen, "cue"), \
+                mock.patch.object(listen, "transcribe_with", return_value=calibrate.SENTENCE), \
+                mock.patch.object(listen, "input_name", return_value="Brio"), \
+                mock.patch.object(listen, "output_volume", return_value=40), \
+                mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            code = calibrate.run()
+        return code, err.getvalue()
+
+    def test_a_clear_voice_is_rated_good_and_saved_for_the_microphone(self) -> None:
+        code, out = self.calibrate(["", "", "q", "s", "s"], [level(0.002, 3), level(0.05, 2)])
+        self.assertEqual(code, 0)
+        self.assertIn("Good: 28 dB above the room, heard every word.", out)
+        self.assertNotIn("To hear you better", out)
+        saved = listen.calibrations()["Brio"]
+        self.assertAlmostEqual(saved["level"], 0.01)  # halfway between room and voice, in decibels
+        self.assertEqual(saved["volume"], 40)
+
+    def test_every_prompt_says_press_enter_to_start(self) -> None:
+        _, out = self.calibrate(["", "", "q", "s", "s"], [level(0.002, 3), level(0.05, 2)])
+        prompts = [line for line in out.splitlines() if "Enter" in line]
+        self.assertEqual(len(prompts), 5)
+        self.assertTrue(all(line.endswith("Press Enter to start.") for line in prompts))
+
+    def test_the_quietest_usable_spot_sets_the_level(self) -> None:
+        takes = [level(0.002, 3), level(0.05, 2), level(0.0128, 2)]
+        code, out = self.calibrate(["", "", "s", "", "q", "s", "s"], takes)  # skips the second spot
+        self.assertIn("Spot 3 of 4: across the room.", out)
+        self.assertEqual(code, 0)
+        self.assertAlmostEqual(listen.calibrations()["Brio"]["level"], (0.0128 * 0.002) ** 0.5)
+
+    def test_a_voice_too_close_to_the_room_is_not_saved(self) -> None:
+        code, out = self.calibrate(["", "", "q", "s", "s"], [level(0.002, 3), level(0.005, 2)])
+        self.assertEqual(code, 1)
+        self.assertIn("Too quiet", out)
+        self.assertIn("System Settings > Sound > Input", out)
+        self.assertIn("Not saved", out)
+        self.assertEqual(listen.calibrations(), {})
+
+    def test_noise_that_rises_and_falls_gets_the_headset_advice(self) -> None:
+        changing = np.concatenate([level(0.002, 0.5), level(0.05, 0.5)] * 3)
+        takes = [level(0.002, 3), level(0.05, 2), changing, level(0.08, 2)]
+        code, out = self.calibrate(["", "", "q", "", "", "s"], takes)
+        self.assertEqual(code, 0)
+        self.assertIn("rises and falls", out)
+        self.assertAlmostEqual(listen.calibrations()["Brio"]["level"], 0.01)  # from the usual room only
+
+    def test_steady_noise_is_measured_and_set_aside(self) -> None:
+        takes = [level(0.002, 3), level(0.05, 2), level(0.01, 3), level(0.2, 2)]
+        _, out = self.calibrate(["", "", "q", "", "", "s"], takes)
+        self.assertIn("This noise is steady", out)
+
+    def test_short_sounds_and_words_are_measured_side_by_side_and_saved(self) -> None:
+        rng = np.random.default_rng(0)
+        quiet = level(0.0, 1)
+
+        def burst(sound: np.ndarray) -> np.ndarray:
+            return np.concatenate([quiet, sound.astype("float32"), quiet])
+        time = np.arange(int(listen.RATE * 0.3)) / listen.RATE
+        cough = burst(rng.normal(0, 0.1, len(time)))  # noise: no pitch
+        word = burst(0.1 * np.sin(2 * np.pi * 150 * time))  # a vowel-like tone at 150 Hz
+        sounds, words = len(calibrate.NOISES), len(calibrate.WORDS)
+        takes = [level(0.002, 3), level(0.05, 2)] + [cough] * (sounds - 1) + [word] * words
+        answers = ["", "", "q", "s", ""] + ["s"] + [""] * (sounds - 1 + words)  # skips the cough prompt
+        code, out = self.calibrate(answers, takes)
+        saved = json.loads((self.state / "sound-events.json").read_text())
+        self.assertEqual(code, 0)
+        self.assertNotIn("cough", saved["sounds"])
+        self.assertAlmostEqual(saved["sounds"]["clap"]["length"], 0.3, delta=0.04)
+        self.assertLess(saved["sounds"]["clap"]["voicing"], 0.5)
+        self.assertGreater(saved["words"]["hey"]["voicing"], 0.9)
+        self.assertRegex(out, r"clap +0\.30 s +\d+ dB +0\.\d\d")
+        self.assertIn("voicing tell the sounds from the words.", out)  # loudness too, in this fake
+
+    def test_a_missed_sound_can_be_tried_again(self) -> None:
+        takes = [level(0.002, 3), level(0.05, 2), level(0.0, 3), level(0.05, 0.5)]
+        answers = ["", "", "q", "s", "", ""] + ["s"] * (len(calibrate.NOISES) - 1 + len(calibrate.WORDS))
+        answers.insert(6, "")  # Enter on "Heard nothing ... Try again"
+        _, out = self.calibrate(answers, takes)
+        self.assertIn("Heard nothing above the room. Try again:", out)
+        saved = json.loads((self.state / "sound-events.json").read_text())
+        self.assertIn("cough", saved["sounds"])
+
+    def test_an_unreadable_microphone_stops_before_recording_or_saving(self) -> None:
+        with mock.patch("sys.stdin", mock.Mock(isatty=lambda: True)), \
+                mock.patch.object(listen, "record") as record, \
+                mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(calibrate.run(), 1)  # TempState reads the name as None
+        record.assert_not_called()
+        self.assertIn("No microphone found", err.getvalue())
+        self.assertEqual(listen.calibrations(), {})
+
+    def test_state_writes_stay_in_the_state_folder_and_leave_no_temporary_file(self) -> None:
+        with self.assertRaises(ValueError):
+            state.write(self.state.parent / "elsewhere.json", "{}")
+        state.write(self.state / "x.json", "{}")
+        self.assertEqual(sorted(p.name for p in self.state.iterdir()), ["x.json"])
+
+    def test_a_microphone_name_drops_characters_a_terminal_would_act_on(self) -> None:
+        sd = mock.Mock(query_devices=mock.Mock(return_value={"name": "Pods\x1b[2J\n"}))
+        self.assertEqual(INPUT_NAME(sd), "Pods[2J")
+
+    def test_a_sound_below_the_room_is_reported_as_nothing(self) -> None:
+        self.assertEqual(calibrate.event(level(0.001, 3), 0.006)["length"], 0.0)
+
+
 class TestTranscribe(unittest.TestCase):
     def test_transcribes_through_the_configured_model_and_releases_it(self) -> None:
         model = mock.Mock()
@@ -322,7 +494,7 @@ class TestToggle(TempState):
         lock = self.held(listen.PIDFILE, None)  # as toggle hands it over: held, no pid yet
         handler = {}
 
-        def record(*args, on_open=None):
+        def record(*args, on_open=None, base=None):
             self.assertIn(listen.signal.SIGUSR1, handler)  # the pid goes out only once a press can't kill it
             self.assertEqual(state.holder(listen.PIDFILE), os.getpid())  # held while it records
             self.assertEqual(cue.call_args_list, [])  # no start sound before the microphone is open
@@ -353,7 +525,7 @@ class TestToggle(TempState):
         (exit code, notifications, the transcribe mock)."""
         notes: list[tuple[str, str]] = []
 
-        def record(*args, on_open=None):
+        def record(*args, on_open=None, base=None):
             on_open()
             return audio
 
@@ -400,7 +572,7 @@ class TestToggle(TempState):
         # the error's type and stack but never its message, which could quote the take.
         notes: list[tuple[str, str]] = []
         log = io.StringIO()
-        with mock.patch.object(listen, "record", side_effect=lambda *a, on_open=None: np.ones(10, dtype="float32")), \
+        with mock.patch.object(listen, "record", side_effect=lambda *a, **k: np.ones(10, dtype="float32")), \
                 mock.patch.object(listen, "transcribe", side_effect=RuntimeError("the dictated words")), \
                 mock.patch.object(listen, "cue"), \
                 mock.patch.object(listen, "notify", side_effect=lambda t, m: notes.append((t, m))), \
@@ -821,7 +993,7 @@ class TestSetup(unittest.TestCase):
         return err.getvalue(), spoke, opened
 
     def test_in_a_terminal_setup_checks_the_speaker_microphone_and_claude_code(self) -> None:
-        out, spoke, opened = self.guided(["", "n"], heard="testing one two", claude="/bin/claude")
+        out, spoke, opened = self.guided(["", "n", "n"], heard="testing one two", claude="/bin/claude")
         spoke.assert_called_once()
         self.assertIn("Heard: testing one two", out)
         self.assertIn("run `voice chat`", out)
@@ -830,7 +1002,7 @@ class TestSetup(unittest.TestCase):
         opened.assert_not_called()
 
     def test_setup_points_to_claude_code_and_the_microphone_setting_and_opens_shortcuts(self) -> None:
-        out, _, opened = self.guided(["", "y"], heard="", claude=None)
+        out, _, opened = self.guided(["", "y", "n"], heard="", claude=None)
         self.assertIn("Privacy & Security > Microphone", out)
         self.assertIn("Claude Code is not installed", out)
         opened.assert_called_once_with(["/usr/bin/open", "-a", "Shortcuts"], check=False)

@@ -53,6 +53,7 @@ The script installs `voice` and downloads the models, about 2.9 GB, once. Then i
 2. It listens to you say a few words. Allow microphone access when macOS asks.
 3. It checks that Claude Code is installed.
 4. It shows the keyboard shortcuts you can add, and offers to open the Shortcuts app.
+5. It offers an optional calibration. See [Calibrating the microphone](#calibrating-the-microphone).
 
 To update later, run `git pull` and then `./install.sh` again.
 
@@ -145,10 +146,28 @@ voice shrink
 
 It needs about 3.5 GB of free memory for a minute. After that, every command uses the copy automatically.
 
+## Calibrating the microphone
+
+`voice` decides what counts as speech from how loud the microphone hears it. Out of the box, that level scales with your Mac's output volume and rises above the room's background noise as it listens. `voice calibrate` tunes it to your microphone, your room and your voice in one to three minutes:
+
+```bash
+voice calibrate
+```
+
+Every prompt ends with "Press Enter to start", and each recording runs from a tick to a pop. Optional steps and spots also accept `s` to skip.
+
+1. It measures the room while you stay quiet for three seconds.
+2. You read one sentence from up to four spots: where you usually sit, the other side of the screen, across the room, and facing away. Each spot is rated good, borderline or too quiet, with a fix for anything short of good. Skip the spots where you won't talk to voice, since each one you keep makes it listen for a quieter voice.
+3. Optionally, you turn on the noise you often work with, such as music, a fan or people talking. It tells you whether that noise is steady, which `voice` sets aside on its own, or rises and falls, which calls for a headset microphone.
+4. Optionally, you make a few short sounds (a cough, a throat clear, a sneeze, a chair, a clap, a desk tap), then say a few short words. It shows each one's length, loudness and voicing (how strongly it has a voice's pitch), and which of those tells the sounds from the words on your microphone. The numbers go to `sound-events.json` in the state folder. For now they're for tuning; they don't change how `voice` listens yet.
+
+The level is saved for that microphone only, from the quietest spot that passed. Other microphones keep the defaults. Run it again after you move rooms or change microphones.
+
 ## Troubleshooting
 
 - **`command not found: voice`.** Run `uv tool update-shell`, then open a new terminal window.
 - **Nothing is heard, or "No sound reached the microphone."** The app that runs `voice` has no microphone access. That's your terminal, or Shortcuts for the keyboard shortcut. Turn it on in **System Settings > Privacy & Security > Microphone**.
+- **Your turn ends too early, never ends, or misses quiet words.** Run `voice calibrate`. It rates how well the microphone hears you and suggests a fix.
 - **No sound plays.** Run `voice speak "hello"`. If that's silent too, check your Mac's sound output.
 - **The shortcut does nothing, or you hear the error sound.** A notification says why. "model missing" means you need to run `voice setup`.
 - **"Waiting for memory."** Memory was very low when you stopped. Your recording is kept, and it transcribes when memory frees up.
@@ -206,7 +225,7 @@ Before loading a model, `voice` checks macOS's memory-pressure level. At critica
 - **Network:** after `voice setup`, `voice` makes no network requests. Every other command sets `HF_HUB_OFFLINE=1` before any model library is imported.
 - **Voice chat:** what you say is typed into Claude Code as your message, so it goes wherever your Claude Code messages go. Until Claude Code reports that message, a copy stays in `~/.local/state/claude-voice/chat-<pid>.unsent.txt`, readable only by you, so a message that never arrives is not lost. The summary Claude speaks is played locally and never stored.
 - **Voice chat and other programs:** any program running as you can reach a session's socket and turn its loop on, the same as `voice chat --toggle`, and the start sound plays when it does. It can also send a made-up prompt or reply, so the loop stops listening or speaks text of its choosing, or turn the loop off. While the microphone is open, any sound it hears, including speech another program plays, is typed in as your message. A leading `/`, `!` or `#` is stripped first, so it arrives as plain text and can't run a slash command, a shell command or a memory write.
-- **Files:** `voice` keeps its lock files, sockets and error logs in `~/.local/state/claude-voice/` (under `$XDG_STATE_HOME` when that is set), a folder only you can read. `voice shrink` writes its copies to `~/.local/share/voice/models/`, each in a folder only you can read. The logs never hold a transcript. `voice` trusts a pid file only while its process is alive and holds a lock on that file, so it never signals a process that has exited.
+- **Files:** `voice` keeps its lock files, sockets, error logs and microphone calibration (a level per microphone name) and sound measurements (numbers only, no audio) in `~/.local/state/claude-voice/` (under `$XDG_STATE_HOME` when that is set), a folder only you can read. `voice shrink` writes its copies to `~/.local/share/voice/models/`, each in a folder only you can read. The logs never hold a transcript. `voice` trusts a pid file only while its process is alive and holds a lock on that file, so it never signals a process that has exited.
 
 ## Contributing
 

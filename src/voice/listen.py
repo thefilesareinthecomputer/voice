@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import contextlib
 import inspect
+import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -28,7 +30,10 @@ if TYPE_CHECKING:  # numpy loads with the recording, not with every key press
 
 RATE = 16_000          # what every speech-to-text model here expects
 FRAME = 0.1            # seconds per level reading
-SPEECH_LEVEL = 0.01    # RMS above which a frame counts as speech
+SPEECH_LEVEL = 0.01    # RMS above which a frame counts as speech, at REFERENCE_VOLUME in a quiet room
+REFERENCE_VOLUME = 50  # output volume (0 to 100) at which SPEECH_LEVEL applies as is
+NOISE_MARGIN = 3.0     # speech is at least this many times the room's noise floor, about 10 dB
+NOISE_FRAMES = 5       # level readings needed before the noise floor counts
 CUE_SECONDS = 0.6      # the start sound lasts 0.56 s; afplay itself stays up about a second longer
 CHUNK_SECONDS = 60.0   # long recordings are transcribed in chunks of this length
 PRESSURE_WAIT = 60.0   # seconds a finished take waits for critical memory pressure to ease
@@ -36,10 +41,90 @@ PRESSURE_WAIT = 60.0   # seconds a finished take waits for critical memory press
 PIDFILE = state.STATE / "listen.pid"
 LOG = state.STATE / "listen.log"
 TRANSCRIBING = state.STATE / "transcribe.lock"
+CALIBRATION = state.STATE / "calibration.json"  # written by `voice calibrate`
 SOUNDS = {"start": "/System/Library/Sounds/Tink.aiff", "stop": "/System/Library/Sounds/Pop.aiff",
           "error": "/System/Library/Sounds/Basso.aiff"}
 # By absolute path, so a folder early on PATH cannot stand in for them.
 PBCOPY, OSASCRIPT, AFPLAY = "/usr/bin/pbcopy", "/usr/bin/osascript", "/usr/bin/afplay"
+
+
+def output_volume() -> int | None:
+    """The Mac's output volume, 0 to 100; None when it is muted or cannot be read."""
+    try:
+        out = subprocess.run([OSASCRIPT, "-e", "get volume settings"], capture_output=True, text=True,
+                             timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    volume = re.search(r"output volume:(\d+)", out)
+    if volume is None or "output muted:true" in out:
+        return None
+    return int(volume.group(1))
+
+
+def input_name(sd) -> str | None:
+    """The default microphone's name, which a calibration is saved under; None when unreadable.
+    A Bluetooth device picks its own name, so anything that is not printable is dropped."""
+    try:
+        name = str(sd.query_devices(kind="input")["name"])
+    except Exception:  # a PortAudio error, no microphone at all, or a test's stand-in
+        return None
+    return "".join(c for c in name if c.isprintable()) or None
+
+
+def usable(value: object, top: float) -> bool:
+    """A number above 0 and at most `top`. JSON's true is not one, NaN and Infinity fail the
+    comparison, and a huge integer compares exactly instead of overflowing."""
+    return type(value) in (int, float) and 0 < value <= top
+
+
+def calibrations() -> dict[str, dict[str, float]]:
+    """The saved calibrations by microphone name; entries without a usable level (at most 1, the
+    loudest RMS float audio can have) and a usable volume are left out."""
+    try:
+        saved = json.loads(CALIBRATION.read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(saved, dict):
+        return {}
+    return {name: entry for name, entry in saved.items()
+            if isinstance(entry, dict) and usable(entry.get("level"), 1) and usable(entry.get("volume"), 100)}
+
+
+def save_calibration(device: str, level: float, volume: int | None) -> None:
+    """Save `level` for `device`, measured at output `volume`, replacing the file in one step."""
+    saved = calibrations()
+    saved[device] = {"level": level, "volume": volume or REFERENCE_VOLUME}
+    state.write(CALIBRATION, json.dumps(saved, indent=2))
+
+
+def base_level(volume: int | None, device: str | None) -> float:
+    """The speech level before any room noise is measured: the microphone's calibrated level, or
+    SPEECH_LEVEL, scaled with the output volume against the volume it was set at, from half to
+    double, on the view that a user who turns the Mac down also speaks more quietly."""
+    saved = calibrations().get(device) if device else None
+    level, reference = (saved["level"], saved["volume"]) if saved else (SPEECH_LEVEL, REFERENCE_VOLUME)
+    if volume is not None:
+        level *= min(2.0, max(0.5, volume / reference))
+    return level
+
+
+def speech_base() -> float:
+    """The base level for the current microphone at the current output volume."""
+    import sounddevice as sd
+
+    return base_level(output_volume(), input_name(sd))
+
+
+def speech_level(levels: list[float], base: float) -> float:
+    """The RMS above which a frame counts as speech: `base` until there are readings to measure
+    the room from, then at least NOISE_MARGIN times the room's noise floor, the 10th percentile
+    of the levels so far, which the gaps between words keep near the room's own noise even while
+    the user talks."""
+    import numpy as np
+
+    if len(levels) < NOISE_FRAMES:
+        return base
+    return max(base, float(np.percentile(levels, 10)) * NOISE_MARGIN)
 
 
 def end_of_speech(levels: list[float], silence: float, threshold: float = SPEECH_LEVEL) -> bool:
@@ -52,19 +137,23 @@ def end_of_speech(levels: list[float], silence: float, threshold: float = SPEECH
 
 def record(max_seconds: float, silence: float | None, stop: Callable[[], bool] | None = None,
            on_open: Callable[[], subprocess.Popen | None] | None = None,
-           patience: float | None = None) -> np.ndarray:
+           patience: float | None = None, base: float | None = None) -> np.ndarray:
     """Record mono 16 kHz audio until `silence` seconds of quiet after speech (never, when None),
     until `stop()` turns true, until `patience` seconds pass with no speech at all, or until
     `max_seconds`. `on_open` runs once the microphone is open, so a start cue never plays
     before the first word can be heard. When it returns the cue's process, what the microphone
     hears while the cue plays is dropped: through built-in speakers the cue is loud enough to
-    count as speech, which would start the end-of-turn countdown before the user says a word."""
+    count as speech, which would start the end-of-turn countdown before the user says a word.
+    `base` is the speech level before the room is measured (speech_base() when None); a caller
+    that later asks whether the take held any sound passes the same value to `heard`."""
     import numpy as np
     import sounddevice as sd
 
     frames: list[np.ndarray] = []
     levels: list[float] = []
     spoke = False
+    loudest = 0.0
+    base = speech_base() if base is None else base
     block = int(RATE * FRAME)
     options = {"samplerate": RATE, "channels": 1, "dtype": "float32", "blocksize": block}
     with contextlib.ExitStack() as stack:
@@ -86,8 +175,10 @@ def record(max_seconds: float, silence: float | None, stop: Callable[[], bool] |
             chunk, _ = stream.read(block)
             frames.append(chunk[:, 0].copy())
             levels.append(float(np.sqrt(np.mean(chunk ** 2))))
-            spoke = spoke or levels[-1] > SPEECH_LEVEL
-            if silence is not None and end_of_speech(levels, silence):
+            loudest = max(loudest, levels[-1])
+            threshold = speech_level(levels, base)
+            spoke = loudest > threshold  # not kept once set: the threshold rises as the noise is measured
+            if silence is not None and end_of_speech(levels, silence, threshold):
                 break
             if patience is not None and not spoke and len(levels) * FRAME >= patience:
                 break
@@ -98,6 +189,12 @@ def peak(audio: np.ndarray) -> float:
     import numpy as np
 
     return float(np.max(np.abs(audio))) if audio.size else 0.0
+
+
+def heard(audio: np.ndarray, base: float) -> bool:
+    """Whether any of `audio` could have counted as speech at `base`: no frame's RMS passes
+    its loudest sample, so a take whose peak stays at or under `base` held none."""
+    return peak(audio) > base
 
 
 def transcribe_with(model, audio: np.ndarray) -> str:
@@ -329,16 +426,16 @@ def run_until_stopped(max_seconds: float, clipboard: bool, force: bool, paste_to
     try:
         loading = models.loading(models.load_stt, models.stt_model(), force) if preload else contextlib.nullcontext()
         with loading as pending:
+            base = speech_base()
             try:
-                audio = record(max_seconds, None, stopped.is_set, on_open=opened)
+                audio = record(max_seconds, None, stopped.is_set, on_open=opened, base=base)
             finally:
                 if lock_fd is not None:
                     os.close(lock_fd)  # a press from here on starts a new recording
             cue("stop")
-            loudest = peak(audio)
-            if loudest <= SPEECH_LEVEL:
+            if not heard(audio, base):
                 hint = ("No sound reached the microphone. Check System Settings > Privacy & Security > Microphone."
-                        if loudest == 0 else "No speech was recognized.")
+                        if peak(audio) == 0 else "No speech was recognized.")
                 notify("voice: nothing heard", hint)
                 return 0
             with one_at_a_time():

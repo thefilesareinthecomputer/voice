@@ -382,10 +382,12 @@ class Devices:
                 on_open: Callable[[], Any] | None = lambda: listen.cue("start")  # noqa: E731
                 while True:
                     left = max(0.0, PATIENCE - (time.monotonic() - started))
-                    audio = listen.record(MAX_TURN, self.silence, stop=stopped.is_set, on_open=on_open, patience=left)
+                    base = listen.speech_base()
+                    audio = listen.record(MAX_TURN, self.silence, stop=stopped.is_set, on_open=on_open,
+                                          patience=left, base=base)
                     if stopped.is_set():
                         return
-                    if listen.peak(audio) > listen.SPEECH_LEVEL and model is not None:
+                    if listen.heard(audio, base) and model is not None:
                         text = listen.transcribe_with(model.result(), audio)
                     if text.strip() or model is None or time.monotonic() - started >= PATIENCE:
                         break
