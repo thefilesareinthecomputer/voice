@@ -55,7 +55,7 @@ The script installs `voice` and downloads the models, about 2.9 GB, once. Then i
 4. It shows the keyboard shortcuts you can add, and offers to open the Shortcuts app.
 5. It offers an optional calibration. See [Calibrating the microphone](#calibrating-the-microphone).
 
-To update later, run `git pull` and then `./install.sh` again.
+To update later, run `git pull` and then `./install.sh` again. The installed `voice` is a copy, so new or changed commands reach it only after `./install.sh` runs again. Until then, run them from the clone with `uv run voice <command>`.
 
 ## Voice chat
 
