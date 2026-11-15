@@ -1046,12 +1046,17 @@ class TestCli(unittest.TestCase):
                                     warm=False, release=False)
 
     def test_chat_passes_options_it_does_not_know_to_claude_and_no_other_command_does(self) -> None:
-        with mock.patch("voice.chat.run", return_value=0) as run:
-            self.assertEqual(cli.main(["chat", "--model", "haiku", "--force"]), 0)
+        with mock.patch("voice.chat.run", return_value=0) as run, mock.patch("voice.chat.leave") as leave:
+            cli.main(["chat", "--model", "haiku", "--force"])
         run.assert_called_once_with(["--model", "haiku"], force=True, silence=3.0)
-        with mock.patch("voice.chat.run", return_value=0) as run:
-            self.assertEqual(cli.main(["chat", "--silence", "5", "--continue"]), 0)
+        leave.assert_called_once_with(0)
+        with mock.patch("voice.chat.run", return_value=0) as run, mock.patch("voice.chat.leave"):
+            cli.main(["chat", "--silence", "5", "--continue"])
         run.assert_called_once_with(["--continue"], force=False, silence=5.0)
+        # A closed window or a kill: the session has cleaned up, and the process still ends at once
+        with mock.patch("voice.chat.run", side_effect=SystemExit(129)), mock.patch("voice.chat.leave") as leave:
+            cli.main(["chat"])
+        leave.assert_called_once_with(129)
         with mock.patch("voice.chat.toggle_running", return_value=0) as toggle:
             self.assertEqual(cli.main(["chat", "--toggle"]), 0)
         toggle.assert_called_once_with()

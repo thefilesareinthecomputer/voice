@@ -570,6 +570,7 @@ class TestRun(TempState):
         with mock.patch("sys.stdin", tty), mock.patch("sys.stdout", tty), \
                 mock.patch.object(chat.shutil, "which", return_value="/usr/bin/true"), \
                 mock.patch.multiple(chat.models, check_pressure=mock.DEFAULT, require=mock.DEFAULT), \
+                mock.patch.object(chat, "end_leftovers"), \
                 mock.patch.object(chat.termios, "tcgetattr"), \
                 mock.patch.object(chat.os, "dup", side_effect=Reached):  # the step after the log opens
             self.assertFalse(self.state.exists())
@@ -589,6 +590,43 @@ class TestRun(TempState):
         with self.assertRaises(SystemExit) as raised:
             chat.ended(signal.SIGHUP, None)
         self.assertEqual(raised.exception.code, 128 + signal.SIGHUP)
+
+    LISTING = "\n".join([
+        "  101     1  501 ??       /u/tools/voice/bin/python /u/.local/bin/voice chat --continue",  # left over
+        "  102   900  501 ttys003  /u/tools/voice/bin/python /u/.local/bin/voice chat",  # live, in a terminal
+        "  103     1  501 ??       /u/.venv/bin/python -I -m voice.cli chat --hook",  # a hook, never a session
+        "  104     1  502 ??       /u/tools/voice/bin/python /u/.local/bin/voice chat",  # another user's
+        "  105     1  501 ??       /u/tools/voice/bin/python /u/.local/bin/voice serve",  # the speaker
+        "  106     1  501 ??       /u/.venv/bin/python /u/.venv/bin/voice chat",  # left over, from a clone
+        "  107     1  501 ??       /u/tools/voice/bin/python /u/.local/bin/voice chat",  # this process
+        "  108     1  501 ??       /usr/bin/vim notes about voice chat",
+    ])
+
+    def test_a_session_whose_terminal_is_gone_is_found_and_nothing_else_is(self) -> None:
+        self.assertEqual(chat.leftover_sessions(self.LISTING, me=107, uid=501), [101, 106])
+
+    def test_leftover_sessions_get_a_term_then_a_kill_if_they_stay(self) -> None:
+        alive = {101, 106}
+        sent = []
+
+        def kill(pid: int, sig: int) -> None:
+            sent.append((pid, sig))
+            if sig == chat.signal.SIGTERM:
+                alive.discard(101)  # 106 is stuck and ignores it
+            elif pid not in alive:
+                raise ProcessLookupError
+
+        listing = mock.Mock(side_effect=lambda: "\n".join(line for line in self.LISTING.splitlines()
+                                                          if int(line.split()[0]) in alive | {102}))
+        with mock.patch.object(chat, "process_listing", listing), \
+                mock.patch.object(chat.os, "kill", side_effect=kill), \
+                mock.patch.object(chat.os, "getpid", return_value=107), \
+                mock.patch.object(chat.os, "getuid", return_value=501), \
+                mock.patch.object(chat, "LEFTOVER_GRACE", 0.05):
+            chat.end_leftovers()
+        self.assertEqual(sent[:2], [(101, chat.signal.SIGTERM), (106, chat.signal.SIGTERM)])
+        self.assertIn((106, chat.signal.SIGKILL), sent)
+        self.assertNotIn((101, chat.signal.SIGKILL), sent)
 
 
 class TestTerminal(TempState):

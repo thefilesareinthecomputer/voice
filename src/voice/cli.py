@@ -158,7 +158,11 @@ def main(argv: list[str] | None = None) -> int:
                 return cmd.hook()
             if args.toggle:
                 return cmd.toggle_running()
-            return cmd.run(passthrough, force=args.force, silence=args.silence or cmd.SILENCE)
+            try:
+                code = cmd.run(passthrough, force=args.force, silence=args.silence or cmd.SILENCE)
+            except SystemExit as exc:  # a closed window or a kill, after the session's cleanup
+                code = exc.code if isinstance(exc.code, int) else 1
+            cmd.leave(code)
         if args.command == "shrink":
             from voice import shrink as cmd
 

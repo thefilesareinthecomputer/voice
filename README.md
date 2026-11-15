@@ -86,7 +86,7 @@ Talk after the tick. Pause for three seconds when you're done. Claude does the w
 - **It turns itself off** after 30 seconds with no words, or when you say "voice chat off".
 - **Sounds.** A tick means it's listening. A pop means your words are on their way.
 - **Use other apps.** The terminal can sit in the background. To approve a permission request, switch back to it.
-- **One at a time.** Starting a second voice chat turns the first one's loop off.
+- **One at a time.** Starting a second voice chat turns the first one's loop off. It also ends any earlier voice chat whose terminal window is gone.
 
 `--silence 5` waits five seconds before ending your turn. Any other option goes to `claude`, such as `--model` or `--resume`.
 

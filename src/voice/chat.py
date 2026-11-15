@@ -43,7 +43,7 @@ import tty
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from voice import listen, models, serve, speak, state
 
@@ -630,6 +630,77 @@ def release_others(own: Path | None) -> None:
             sock.sendall(b'{"hook_event_name": "Off"}\n')
 
 
+LEFTOVER_GRACE = 2.0  # seconds a leftover session gets to run its cleanup before it is killed
+
+
+def process_listing() -> str:
+    try:
+        return subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,uid=,tty=,command="],
+                              capture_output=True, text=True, timeout=5, check=False).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def is_session(args: list[str]) -> bool:
+    """Whether a command line is a `voice chat` session: `voice chat ...`, run directly or through
+    its interpreter, or `python -m voice.cli chat ...`. A hook or a toggle is not a session."""
+    rest = args[1:]
+    while rest and rest[0].startswith("-") and rest[0] != "-m":  # interpreter options such as -I
+        rest = rest[1:]
+    if rest[:2] == ["-m", "voice.cli"]:
+        rest = rest[2:]
+    elif args and os.path.basename(args[0]) == "voice":
+        rest = args[1:]
+    elif rest and os.path.basename(rest[0]) == "voice":
+        rest = rest[1:]
+    else:
+        return False
+    return rest[:1] == ["chat"] and not {"--hook", "--toggle"} & set(rest)
+
+
+def leftover_sessions(listing: str, me: int, uid: int) -> list[int]:
+    """The user's `voice chat` sessions that outlived their terminal window: no controlling
+    terminal, and adopted by launchd (parent 1). `listing` is `ps -axo pid=,ppid=,uid=,tty=,command=`."""
+    found = []
+    for line in listing.splitlines():
+        parts = line.split(None, 4)
+        if len(parts) < 5 or not parts[0].isdigit():
+            continue
+        pid, ppid, owner, terminal, command = parts
+        if (int(pid) != me and ppid == "1" and owner == str(uid) and terminal == "??"
+                and is_session(command.split())):
+            found.append(int(pid))
+    return found
+
+
+def end_leftovers() -> None:
+    """End `voice chat` sessions whose window is gone. A session with a terminal is left alone,
+    and other sessions' loops are turned off by `release_others` instead. A leftover gets a
+    SIGTERM, which runs its cleanup; one still there after `LEFTOVER_GRACE` is stuck in a
+    cleanup that ignores signals, and is killed."""
+    me, uid = os.getpid(), os.getuid()
+    pids = leftover_sessions(process_listing(), me, uid)
+    for pid in pids:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + LEFTOVER_GRACE
+    while pids and time.monotonic() < deadline:
+        time.sleep(0.1)
+        pids = [pid for pid in leftover_sessions(process_listing(), me, uid) if pid in pids]
+    for pid in pids:  # still listed as a leftover session, so the pid was not reused
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+
+
+def leave(code: int) -> NoReturn:
+    """End the process at once, after `run` has done its own cleanup. Waiting for interpreter
+    shutdown let a hung exit handler keep a session alive for days after its window closed."""
+    with contextlib.suppress(Exception):
+        sys.stdout.flush()
+        sys.stderr.flush()
+    os._exit(code)
+
+
 class EventServer:
     """Accepts hook connections on a thread and posts each event. A prompt is answered with
     whether the loop is on, from `loop_on`."""
@@ -726,6 +797,7 @@ def run(claude_args: list[str], force: bool = False, silence: float = SILENCE) -
             os.write(wake_w, b"w")
 
     state.folder()  # a first run on a new machine has none yet
+    end_leftovers()
     log_fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     saved_err = os.dup(2)
     started_speaker = serve.start(force)
