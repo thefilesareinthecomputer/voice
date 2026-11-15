@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     speak = sub.add_parser("speak", help="read text aloud")
     speak.add_argument("text", nargs="*", help="the text; read from stdin when absent")
     speak.add_argument("--stop", action="store_true", help="stop whatever is playing")
-    speak.add_argument("--voice", help="speaking voice, such as af_heart or bf_emma (see `voice voices`)")
+    speak.add_argument("--voice", help="speaking voice, such as heart, fenrir or bf_emma (see `voice voices`)")
     speak.add_argument("--speed", type=number(0.5, 2.0), help="speaking speed from 0.5 to 2.0; 1.0 is normal")
     speak.add_argument("--force", action="store_true", help="load even under critical memory pressure")
     speak.add_argument("--warm", action="store_true",

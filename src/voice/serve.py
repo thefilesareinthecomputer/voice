@@ -128,7 +128,7 @@ def handle(speaker: Speaker, conn: Any, message: Any) -> bool:
         except (SystemExit, models.ModelMissing) as exc:
             answer(conn, f"error: {exc}")
             return True
-        speaker.say(conn, text, path, float(speed), voice[:1] or "a")
+        speaker.say(conn, text, path, float(speed), speak.language(voice))
     else:
         answer(conn, "error: unknown request")
     return True

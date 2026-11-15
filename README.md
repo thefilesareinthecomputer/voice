@@ -140,14 +140,15 @@ Allowing it gives that app, and any plugins or scripts it runs, lasting control 
 ```bash
 voice speak "The build passed and the release is ready."
 echo "Text from another program" | voice speak
-voice speak --voice bf_emma --speed 1.1 "A different voice, a little faster."
+voice speak --voice emma --speed 1.1 "A different voice, a little faster."
 voice speak --stop
 ```
 
 - A new `speak` stops the one already playing.
 - On its own, `speak` takes about 4 seconds to start. `voice speak --warm` keeps the model loaded in the background, about 450 MB, so each `speak` starts in about half a second. `voice speak --release` frees it, and it frees itself after ten minutes with no request.
 - `--speed` goes from 0.5 to 2.0.
-- `voice voices` lists the 54 voices. The first letter is the accent (`a` American, `b` British). The second is `f` female or `m` male. The default is `af_heart`.
+- `voice voices` lists the 54 voices. In a name such as `af_heart`, the first letter is the language the voice was trained on: `a` American English, `b` British English, `e` Spanish, `f` French, `h` Hindi, `i` Italian, `j` Japanese, `p` Brazilian Portuguese, `z` Mandarin. The second letter is `f` female or `m` male. Every voice reads English: `b` voices with British pronunciation, all others with American, each in its own sound. The default is `af_heart`.
+- `VOICE_NAME` sets the voice for every command, including `voice chat`: `VOICE_NAME=fenrir voice chat --continue`. The part after the underscore is enough, as in `fenrir` or `heart`, here and with `--voice`. A few short names belong to two voices, such as `santa` (`am_santa` and `em_santa`); use the full name for those.
 
 ## A smaller dictation model
 
@@ -208,7 +209,7 @@ Measured on an M1 with 16 GB: Parakeet loads in about 3 s and transcribes 8 seco
 |---|---|---|
 | `VOICE_STT_MODEL` | the 16-bit copy once `voice shrink` made it, else `mlx-community/parakeet-tdt-0.6b-v2` | the speech-to-text model: a Parakeet build, as a Hugging Face repo or a local folder |
 | `VOICE_TTS_MODEL` (or `VOICE_MODEL`) | `mlx-community/Kokoro-82M-bf16` | the text-to-speech model: a Kokoro build, as a repo or a folder; the voices come from its `voices` folder |
-| `VOICE_NAME` | `af_heart` | the speaking voice; `--voice` overrides it |
+| `VOICE_NAME` | `af_heart` | the speaking voice, by full or short name (`heart`); `--voice` overrides it |
 | `VOICE_SPEED` | `1.0` | the speaking speed, from 0.5 to 2.0; `--speed` overrides it |
 
 A local folder is an absolute path or one starting with `~`. Any other name is a Hugging Face repo, never a folder in the current directory.

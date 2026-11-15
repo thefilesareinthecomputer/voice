@@ -47,9 +47,8 @@ def newest() -> str:
 
 
 def settings(voice: str | None = None, speed: float | None = None) -> tuple[str, float, str]:
-    """The voice, the speed and the pronunciation code. A flag beats the environment, which beats the default.
-    Kokoro's voice names start with their accent code: `a` American, `b` British."""
-    voice = voice or os.environ.get("VOICE_NAME", "af_heart")
+    """The voice, the speed and the pronunciation code. A flag beats the environment, which beats the default."""
+    voice = full_name(voice or os.environ.get("VOICE_NAME", "af_heart"))
     if speed is None:
         low, high = SPEED_RANGE
         try:
@@ -58,7 +57,14 @@ def settings(voice: str | None = None, speed: float | None = None) -> tuple[str,
             speed = math.nan
         if not (math.isfinite(speed) and low <= speed <= high):
             raise SystemExit(f"voice: VOICE_SPEED must be a number from {low} to {high}, such as 1.0")
-    return voice, speed, voice[:1] or "a"
+    return voice, speed, language(voice)
+
+
+def language(voice: str) -> str:
+    """Kokoro's pronunciation code for a voice. A name starts with its language, such as `a`
+    American English, `b` British English or `e` Spanish. `voice` reads English, so a British
+    voice keeps British pronunciation and every other voice reads with American English."""
+    return "b" if voice.startswith("b") else "a"
 
 
 def voice_folder() -> Path | None:
@@ -71,6 +77,18 @@ def voices(folder: Path | None = None) -> list[str]:
     """The voices of the configured speech model, or nothing before `voice setup`."""
     folder = folder or voice_folder()
     return sorted({p.stem for p in folder.glob("*.safetensors")}) if folder else []
+
+
+def full_name(name: str) -> str:
+    """The listed voice a short name such as `heart` stands for (`af_heart`). A full name, or a
+    short one that matches nothing, passes through for `voice_file` to report."""
+    if "_" in name:
+        return name
+    short = name.lower()
+    matches = [v for v in voices() if v.split("_", 1)[-1] == short]
+    if len(matches) > 1:
+        raise SystemExit(f"voice: {name!r} could be {' or '.join(matches)}; use the full name")
+    return matches[0] if matches else name
 
 
 def voice_file(name: str) -> str:

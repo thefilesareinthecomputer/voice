@@ -784,6 +784,21 @@ class TestSpeak(TempState):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(speak.settings(), ("af_heart", 1.0, "a"))
 
+    def test_a_voice_can_be_named_by_its_short_name(self) -> None:
+        listed = ["af_heart", "am_fenrir", "am_santa", "bf_emma", "em_santa"]
+        with mock.patch.object(speak, "voices", return_value=listed):
+            with mock.patch.dict(os.environ, {"VOICE_NAME": "fenrir"}, clear=True):
+                self.assertEqual(speak.settings(), ("am_fenrir", 1.0, "a"))
+                self.assertEqual(speak.settings("Emma"), ("bf_emma", 1.0, "b"))
+            with mock.patch.dict(os.environ, {"VOICE_NAME": "santa"}, clear=True), \
+                    self.assertRaises(SystemExit) as caught:
+                speak.settings()
+            self.assertIn("am_santa or em_santa", str(caught.exception))
+            with mock.patch.dict(os.environ, {"VOICE_NAME": "em_santa"}, clear=True):
+                self.assertEqual(speak.settings()[2], "a")  # every voice reads English
+            with mock.patch.dict(os.environ, {"VOICE_NAME": "nobody"}, clear=True):
+                self.assertEqual(speak.settings()[0], "nobody")  # voice_file reports it
+
     def test_a_voice_plays_from_the_loaded_models_own_folder_and_nowhere_else(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "voices").mkdir()

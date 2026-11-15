@@ -17,6 +17,7 @@ All notable changes to this project are listed here. The format follows [Keep a 
 - `--preload` with `--toggle` loads the model while you talk, for a shorter wait after the stop press.
 - `VOICE_TTS_MODEL` names the text-to-speech model; `VOICE_MODEL` still works.
 - A Troubleshooting section in the README.
+- A voice can be named by the part after the underscore, such as `heart` for `af_heart`, in `--voice` and `VOICE_NAME`. `VOICE_NAME=fenrir voice chat --continue` picks the voice for voice chat.
 - An Updating section in the README, and steps in `CONTRIBUTING.md` for running changes and updating a development clone.
 - `voice calibrate`, also offered at the end of `voice setup`, measures the room and your voice from up to four spots and saves a speech level for that microphone. It rates each spot, gives a fix for anything short of good, and checks whether your usual background noise is steady or changing. An optional last step measures short sounds such as a cough or a clap against short words by length, loudness and voicing, as groundwork for keeping such sounds from ending a turn.
 
@@ -39,6 +40,10 @@ All notable changes to this project are listed here. The format follows [Keep a 
 - The 16-bit copy from `voice shrink` is used without a setting once it exists.
 - `voice speak` makes each sentence while the last one plays, a stop ends playback at once, and a request that waited for its turn steps aside for a newer one or a stop.
 - Numbers on the command line must be finite and in range, and flag combinations that would do nothing (`--toggle --no-copy`, `--paste` without `--toggle`, `--stop` with text) are refused. `voice speak` with no text on a terminal shows its usage instead of waiting.
+
+### Fixed
+
+- Every one of the 54 voices reads English. Before, a Japanese or Mandarin voice failed for a missing package, and the other non-English voices read English text with their own language's pronunciation rules.
 
 ### Security
 
