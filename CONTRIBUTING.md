@@ -15,12 +15,30 @@ uv run python -m unittest discover -s tests
 uv run ruff check
 ```
 
-To try your changes as the installed command, install it editable from the clone, pinned to the lock as in the README:
+## Running your changes
+
+Install `voice` editable from the clone once, pinned to the lock as in the README. The `voice` command on your PATH then runs the code in this folder:
 
 ```bash
 uv export --frozen --no-dev --no-emit-project --output-file requirements.txt
 uv tool install --editable --constraints requirements.txt .
+voice setup
 ```
+
+Don't run `./install.sh` in a development clone. It installs a copy over the editable install, and your edits stop reaching `voice` until you run the editable install again. To see which one you have, run `grep editable "$(uv tool dir)/voice/uv-receipt.toml"`; it prints a line only for an editable install.
+
+**After you change code.** The next `voice` command you start runs the new code. A running `voice chat` and the background speaker keep the old code, so quit `voice chat` and start it again (`voice chat --continue` resumes the conversation), and run `voice speak --release`.
+
+**After you pull.** Run:
+
+```bash
+git pull
+uv sync
+uv export --frozen --no-dev --no-emit-project --output-file requirements.txt
+uv tool install --editable --constraints requirements.txt .
+```
+
+`uv sync` updates the clone's environment for the tests, and the last two commands update the installed command's package versions from `uv.lock`. They are safe to run when nothing changed. If the pull changed `REVISIONS` in `src/voice/models.py`, run `voice setup` to download the new models. Then restart `voice chat` and the speaker as above.
 
 ## What every change needs
 

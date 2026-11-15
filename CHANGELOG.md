@@ -17,6 +17,7 @@ All notable changes to this project are listed here. The format follows [Keep a 
 - `--preload` with `--toggle` loads the model while you talk, for a shorter wait after the stop press.
 - `VOICE_TTS_MODEL` names the text-to-speech model; `VOICE_MODEL` still works.
 - A Troubleshooting section in the README.
+- An Updating section in the README, and steps in `CONTRIBUTING.md` for running changes and updating a development clone.
 - `voice calibrate`, also offered at the end of `voice setup`, measures the room and your voice from up to four spots and saves a speech level for that microphone. It rates each spot, gives a fix for anything short of good, and checks whether your usual background noise is steady or changing. An optional last step measures short sounds such as a cough or a clap against short words by length, loudness and voicing, as groundwork for keeping such sounds from ending a turn.
 
 ### Changed
