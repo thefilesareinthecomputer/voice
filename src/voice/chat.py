@@ -764,6 +764,17 @@ def ended(signum: int, _frame: Any) -> None:
     raise SystemExit(128 + signum)
 
 
+PARENT_CHECK = 60.0  # seconds between checks that the shell that started the session is still there
+
+
+def check_parent(parent: int) -> None:
+    """Leave through the cleanup, as if hung up, once the process that started the session is
+    gone, such as a shell or a wrapper like `uv run` that was killed, or a window whose hangup
+    never arrived. A session in use keeps its parent, so this never ends one."""
+    if os.getppid() != parent:
+        raise SystemExit(128 + signal.SIGHUP)
+
+
 def run(claude_args: list[str], force: bool = False, silence: float = SILENCE) -> int:
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         print("voice chat: run it in a terminal; it shares the terminal with Claude Code", file=sys.stderr)
@@ -798,6 +809,7 @@ def run(claude_args: list[str], force: bool = False, silence: float = SILENCE) -
 
     state.folder()  # a first run on a new machine has none yet
     end_leftovers()
+    parent = os.getppid()
     log_fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     saved_err = os.dup(2)
     started_speaker = serve.start(force)
@@ -819,7 +831,8 @@ def run(claude_args: list[str], force: bool = False, silence: float = SILENCE) -
         terminal.resize(stdin)
         session.start()
         while not terminal.eof:
-            ready = select.select([terminal.fd, stdin, wake_r], [], [])[0]
+            ready = select.select([terminal.fd, stdin, wake_r], [], [], PARENT_CHECK)[0]
+            check_parent(parent)
             if terminal.fd in ready:
                 data = terminal.read(0)
                 while data:

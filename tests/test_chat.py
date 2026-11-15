@@ -591,6 +591,17 @@ class TestRun(TempState):
             chat.ended(signal.SIGHUP, None)
         self.assertEqual(raised.exception.code, 128 + signal.SIGHUP)
 
+    def test_a_session_whose_parent_is_gone_leaves_through_the_cleanup(self) -> None:
+        """A killed shell or wrapper leaves the session adopted by launchd with no hangup, its
+        terminal still open. The loop checks its parent once a minute and leaves as if hung up."""
+        import signal
+
+        with mock.patch.object(chat.os, "getppid", return_value=500):
+            chat.check_parent(500)  # still there: nothing happens
+        with mock.patch.object(chat.os, "getppid", return_value=1), self.assertRaises(SystemExit) as raised:
+            chat.check_parent(500)
+        self.assertEqual(raised.exception.code, 128 + signal.SIGHUP)
+
     LISTING = "\n".join([
         "  101     1  501 ??       /u/tools/voice/bin/python /u/.local/bin/voice chat --continue",  # left over
         "  102   900  501 ttys003  /u/tools/voice/bin/python /u/.local/bin/voice chat",  # live, in a terminal
