@@ -230,9 +230,55 @@ class TestSession(TempState):
         self.assertEqual(self.fx.names(), ["load", "claim", "cue", "listen"])
 
     def test_a_reply_that_lands_while_the_user_talks_leaves_the_microphone_alone(self) -> None:
-        self.session.handle(("reply", "<speak>Hi.</speak>"))  # from start(), listening already
+        self.session.handle(("talking", self.session.generation))  # listening since start()
+        self.session.handle(("reply", "<speak>Hi.</speak>"))
         self.assertNotIn("say", self.fx.names())
         self.assertNotIn("stop_listening", self.fx.names())
+        self.session.handle(("heard", self.session.generation, "my words"))
+        self.assertEqual(self.fx.calls[-1], ("submit", "my words"))
+        self.assertNotIn("say", self.fx.names())  # the user moved on, so the old summary stays unsaid
+
+    def test_a_reply_that_lands_after_a_sound_with_no_words_is_spoken(self) -> None:
+        self.session.handle(("talking", self.session.generation))  # a cough
+        self.session.handle(("reply", "<speak>Hi.</speak>"))
+        self.session.handle(("heard", self.session.generation, ""))
+        self.assertTrue(self.session.on)
+        self.assertEqual(self.fx.calls[-1][:2], ("say", "Hi."))
+
+    def test_a_reply_that_lands_while_the_microphone_waits_is_spoken(self) -> None:
+        """Nothing has been said yet, so the listening stops for the summary and opens again after."""
+        gen = self.session.generation  # listening since start()
+        self.session.handle(("prompt", "a background task finished"))
+        self.session.handle(("reply", "<speak>The task finished.</speak>"))
+        self.assertIn("stop_listening", self.fx.names())
+        say = self.fx.calls[-1]
+        self.assertEqual(say[:2], ("say", "The task finished."))
+        self.session.handle(("heard", gen, ""))  # the cancelled listen reports late: dropped
+        self.assertTrue(self.session.on)
+        self.session.handle(("spoken", say[2]))
+        self.assertEqual(self.fx.names()[-1], "listen")
+
+    def test_silence_while_claude_works_keeps_the_loop_on(self) -> None:
+        """The sequence from a long session: a summary plays, the microphone opens, a background
+        agent's hand-back starts a turn, the user stays quiet past the patience, and the turn
+        ends. The summary must still be spoken and the microphone must open after it."""
+        self.asked()
+        self.session.handle(("reply", "<speak>First summary.</speak>"))
+        self.session.handle(("spoken", self.fx.calls[-1][2]))
+        gen = self.listening_generation()
+        self.session.handle(("prompt", "Another agent finished"))
+        self.session.handle(("heard", gen, ""))  # PATIENCE ran out with no words
+        self.assertTrue(self.session.on)
+        self.assertNotIn("unload", self.fx.names())
+        self.session.handle(("reply", "<speak>The agent finished.</speak>"))
+        say = self.fx.calls[-1]
+        self.assertEqual(say[:2], ("say", "The agent finished."))
+        self.session.handle(("spoken", say[2]))
+        self.assertEqual(self.fx.names()[-1], "listen")
+
+    def test_turning_off_notes_why_in_the_log(self) -> None:
+        self.session.handle(("off",))
+        self.assertIn(("note", "loop off: another voice chat came on"), self.fx.calls)
 
     def test_a_reply_to_a_turn_claude_started_itself_is_spoken(self) -> None:
         # A background task finishing starts a turn with no prompt event before its reply.
@@ -532,6 +578,22 @@ class TestDevices(TempState):
         self.assertIsNotNone(calls[0]["on_open"])
         self.assertIsNone(calls[1]["on_open"])  # no second start sound: the microphone stayed open
         self.assertLess(calls[1]["patience"], calls[0]["patience"] + 0.001)
+
+    def test_the_first_sound_that_counts_as_speech_is_reported(self) -> None:
+        posted: list[tuple] = []
+        done = threading.Event()
+        fx = chat.Devices(lambda event: (posted.append(event), event[0] == "heard" and done.set()), force=False)
+        fx.model = mock.Mock(result=mock.Mock(return_value="model"))
+
+        def record(*args, on_speech, **kwargs):
+            on_speech()
+            return np.ones(10, "float32")
+        with mock.patch.object(chat, "quiet"), mock.patch.object(chat.listen, "cue"), \
+                mock.patch.object(chat.listen, "record", side_effect=record), \
+                mock.patch.object(chat.listen, "transcribe_with", return_value="words"):
+            fx.listen(1)
+            self.assertTrue(done.wait(5))
+        self.assertEqual(posted, [("talking", 1), ("heard", 1, "words")])
 
     def test_no_words_before_the_patience_runs_out_ends_the_turn(self) -> None:
         with mock.patch.object(chat, "PATIENCE", 0.0):

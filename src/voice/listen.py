@@ -137,7 +137,8 @@ def end_of_speech(levels: list[float], silence: float, threshold: float = SPEECH
 
 def record(max_seconds: float, silence: float | None, stop: Callable[[], bool] | None = None,
            on_open: Callable[[], subprocess.Popen | None] | None = None,
-           patience: float | None = None, base: float | None = None) -> np.ndarray:
+           patience: float | None = None, base: float | None = None,
+           on_speech: Callable[[], object] | None = None) -> np.ndarray:
     """Record mono 16 kHz audio until `silence` seconds of quiet after speech (never, when None),
     until `stop()` turns true, until `patience` seconds pass with no speech at all, or until
     `max_seconds`. `on_open` runs once the microphone is open, so a start cue never plays
@@ -145,7 +146,8 @@ def record(max_seconds: float, silence: float | None, stop: Callable[[], bool] |
     hears while the cue plays is dropped: through built-in speakers the cue is loud enough to
     count as speech, which would start the end-of-turn countdown before the user says a word.
     `base` is the speech level before the room is measured (speech_base() when None); a caller
-    that later asks whether the take held any sound passes the same value to `heard`."""
+    that later asks whether the take held any sound passes the same value to `heard`.
+    `on_speech` runs once, the first time a frame counts as speech."""
     import numpy as np
     import sounddevice as sd
 
@@ -178,6 +180,9 @@ def record(max_seconds: float, silence: float | None, stop: Callable[[], bool] |
             loudest = max(loudest, levels[-1])
             threshold = speech_level(levels, base)
             spoke = loudest > threshold  # not kept once set: the threshold rises as the noise is measured
+            if spoke and on_speech is not None:
+                on_speech()
+                on_speech = None
             if silence is not None and end_of_speech(levels, silence, threshold):
                 break
             if patience is not None and not spoke and len(levels) * FRAME >= patience:

@@ -9,6 +9,7 @@ an Accessibility or Automation grant.
     Control+Q         turn the loop off, or on again (it starts on)
     any other key     stop the speech or the listening in progress; the key goes to Claude
     "voice chat off"  said on its own, turns the loop off; so does 30 seconds of silence
+                      while Claude is not working
 
 Claude Code learns about the loop through `--settings` on this one session, which adds hooks
 that report each prompt and reply over a private socket. While the loop is on, the prompt
@@ -116,8 +117,9 @@ class Session:
         self.on = False
         self.busy = False       # Claude is working on a prompt
         self.phase = "idle"     # or "speaking" or "listening"
+        self.talking = False    # the listening in progress has heard something that counts as speech
         self.generation = 0
-        self.pending: str | None = None  # a reply that came in while a summary played
+        self.pending: str | None = None  # a reply that came in while a summary played or the user talked
         self.held: str | None = None     # what was said while Claude was mid-turn, not yet typed
         self.sent: str | None = None     # the message typed last, until Claude Code reports that prompt
 
@@ -133,7 +135,7 @@ class Session:
             self.toggle()
         elif kind == "off":  # another session's loop came on: one microphone loop at a time
             if self.on:
-                self._turn_off()
+                self._turn_off("another voice chat came on")
                 self.fx.notify("voice chat: moved", "Another voice chat is listening now. "
                                "This one is plain typing; press Control+Q here to take it back.")
         elif kind == "prompt":
@@ -158,10 +160,14 @@ class Session:
             self.busy = False
             if self._flush():  # what was said during the turn goes in now, ahead of any summary
                 return
-            if not self.on or self.phase == "listening":  # never talk over the user
+            if not self.on:
                 return
-            if self.phase == "speaking":
-                self.pending = event[1]  # after the summary playing, not over it
+            if self.phase == "listening" and not self.talking:
+                # The microphone is open but nothing has been said, as when a turn Claude started
+                # itself ends while the user waits: stop listening and speak the summary.
+                self._cancel()
+            if self.phase != "idle":
+                self.pending = event[1]  # after the summary playing or the user's turn, not over it
             else:
                 self._reply(event[1])
         elif kind == "notice":
@@ -178,6 +184,8 @@ class Session:
                     self._reply(pending)
                 elif self.on and not self.busy:
                     self._listen()
+        elif kind == "talking" and event[1] == self.generation and self.phase == "listening":
+            self.talking = True
         elif kind == "heard" and event[1] == self.generation and self.phase == "listening":
             self.phase = "idle"
             self._heard(event[2])
@@ -214,7 +222,7 @@ class Session:
         While the loop is on but waiting, as it is after an interruption, it starts listening: a
         press that turned the loop off there would only look like nothing happened."""
         if self.on and self.phase != "idle":
-            self._turn_off()
+            self._turn_off("Control+Q or the shortcut")
         elif self.on:
             self.fx.cue("on")
             self._listen()
@@ -239,17 +247,24 @@ class Session:
     def _listen(self) -> None:
         self.generation += 1
         self.phase = "listening"
+        self.talking = False
         self.fx.listen(self.generation)
 
     def _heard(self, text: str | None) -> None:
+        # A reply that came in while the user talked: spoken only if nothing was said after all.
+        pending, self.pending = self.pending, None
         if text is None:  # the microphone or the model failed; the error sound has played
-            self._turn_off()
+            self._turn_off("the microphone or the speech model failed")
             self.fx.notify("voice chat: off", "The microphone or the speech model failed; the error is in "
                            "~/.local/state/claude-voice/chat.log. Press Control+Q to try again.")
+        elif not text.strip() and pending is not None:
+            self._reply(pending)
+        elif not text.strip() and self.busy:
+            pass  # Claude is working: its reply is spoken when it comes, and the microphone reopens
         elif not text.strip():
-            self._turn_off(paused=True)
+            self._turn_off(f"no speech for {PATIENCE:.0f} seconds", paused=True)
         elif off_phrase(text):
-            self._turn_off()
+            self._turn_off("the off phrase")
         else:
             self._deliver(text.strip())
 
@@ -285,9 +300,10 @@ class Session:
         self.pending = None
         self.generation += 1
 
-    def _turn_off(self, paused: bool = False) -> None:
+    def _turn_off(self, reason: str, paused: bool = False) -> None:
         self._cancel()
         self.on = False
+        self.fx.note(f"loop off: {reason}")
         self.fx.unload()
         self.fx.cue("off")
         if paused:
@@ -380,11 +396,12 @@ class Devices:
                 # in it. That is not the user's turn: listen on, quietly, until PATIENCE runs out.
                 started = time.monotonic()
                 on_open: Callable[[], Any] | None = lambda: listen.cue("start")  # noqa: E731
+                on_speech = lambda: self.post(("talking", generation))  # noqa: E731
                 while True:
                     left = max(0.0, PATIENCE - (time.monotonic() - started))
                     base = listen.speech_base()
                     audio = listen.record(MAX_TURN, self.silence, stop=stopped.is_set, on_open=on_open,
-                                          patience=left, base=base)
+                                          patience=left, base=base, on_speech=on_speech)
                     if stopped.is_set():
                         return
                     if listen.heard(audio, base) and model is not None:
@@ -446,6 +463,10 @@ class Devices:
 
     def notify(self, title: str, message: str) -> None:
         listen.notify(title, message)
+
+    def note(self, line: str) -> None:
+        """A dated line in chat.log, never anything that was said."""
+        print(time.strftime("%Y-%m-%d %H:%M:%S"), line, file=sys.stderr, flush=True)
 
 
 def quiet(stopped: threading.Event, wait: float = 60.0) -> None:

@@ -83,7 +83,7 @@ Talk after the tick. Pause for three seconds when you're done. Claude does the w
 - **Continue a conversation.** `voice chat --continue` reopens the last conversation in this folder. To move a Claude Code session you have open into voice, quit it, then run this.
 - **Type any time.** Any key stops the speech or the listening, and goes to Claude as usual. The mouse doesn't stop anything.
 - **Control+Q.** If it's talking or listening, Control+Q turns it off. If it's quiet, Control+Q makes it listen.
-- **It turns itself off** after 30 seconds with no words, or when you say "voice chat off".
+- **It turns itself off** after 30 seconds with no words while Claude isn't working, or when you say "voice chat off". If Claude starts work on its own, for example when a background agent finishes, it reads you that summary too and then listens again.
 - **Sounds.** A tick means it's listening. A pop means your words are on their way.
 - **Use other apps.** The terminal can sit in the background. To approve a permission request, switch back to it.
 - **One at a time.** Starting a second voice chat turns the first one's loop off. It also ends any earlier voice chat whose terminal window is gone.

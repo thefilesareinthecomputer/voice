@@ -44,6 +44,7 @@ All notable changes to this project are listed here. The format follows [Keep a 
 ### Fixed
 
 - A `voice chat` whose window closed no longer stays running. It exits as soon as its own cleanup is done, instead of waiting on Python's shutdown, where one stayed alive for two days. Once a minute it also checks that the process that started it, such as the shell or `uv run`, is still there, and leaves through its cleanup once it isn't. A new `voice chat` also ends any earlier one left without a terminal: a SIGTERM first, then a SIGKILL after two seconds.
+- `voice chat` no longer goes quiet after a turn Claude starts by itself while the microphone is open. Before, 30 seconds of silence during that turn turned the loop off, so its summary and every later one went unspoken and the microphone stayed closed until Control+Q. A reply that came in before the user said anything was also dropped. Now silence turns the loop off only while Claude is not working, and a reply that arrives while the microphone waits is spoken, after which the microphone opens again. Each time the loop turns off, `chat.log` records why.
 - Every one of the 54 voices reads English. Before, a Japanese or Mandarin voice failed for a missing package, and the other non-English voices read English text with their own language's pronunciation rules.
 
 ### Security

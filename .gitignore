@@ -33,3 +33,4 @@ models/
 
 # Working notes stay local
 tasks/
+.claude/

@@ -716,6 +716,18 @@ class TestToggle(TempState):
             audio = listen.record(1800.0, None, stop)
         self.assertEqual(len(audio), 30 * int(listen.RATE * listen.FRAME))
 
+    def test_record_reports_the_first_speech_once(self) -> None:
+        class Loud(FakeStream):
+            def read(self, n: int):
+                return np.full((n, 1), 0.5, dtype="float32"), False
+
+        for stream, expected in ((FakeStream, 0), (Loud, 1)):
+            spoke: list[int] = []
+            fake = SimpleNamespace(InputStream=stream)
+            with mock.patch.dict(sys.modules, {"sounddevice": fake}):
+                listen.record(1.0, None, base=0.01, on_speech=lambda found=spoke: found.append(1))
+            self.assertEqual(len(spoke), expected, stream.__name__)
+
 
 class TestChunking(unittest.TestCase):
     def test_long_audio_is_chunked_only_where_the_model_supports_it(self) -> None:
